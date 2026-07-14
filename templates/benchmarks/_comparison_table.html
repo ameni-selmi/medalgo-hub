@@ -1,0 +1,49 @@
+<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="bg-slate-50 border-b border-slate-200">
+          <th class="text-left px-4 py-3 font-medium text-slate-600">#</th>
+          <th class="text-left px-4 py-3 font-medium text-slate-600">Model</th>
+          {% for key in metric_keys %}
+          <th class="text-right px-4 py-3 font-medium text-slate-600 cursor-pointer hover:text-accent"
+              hx-get="{% url 'algorithms:benchmark_detail' benchmark.slug %}?sort={{ key }}&dir={% if sort_by == key and sort_dir == 'desc' %}asc{% else %}desc{% endif %}"
+              hx-target="closest .bg-white"
+              hx-swap="outerHTML">
+            <span class="capitalize">{{ key }}</span>
+            {% if sort_by == key %}
+              <span class="ml-1">{% if sort_dir == 'desc' %}&#9660;{% else %}&#9650;{% endif %}</span>
+            {% endif %}
+          </th>
+          {% endfor %}
+          <th class="px-4 py-3"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in entries %}
+        <tr class="border-b border-slate-100 {% if entry.is_highlighted %}bg-amber-50/50{% elif forloop.counter|divisibleby:2 %}bg-slate-50/50{% endif %} hover:bg-slate-50">
+          <td class="px-4 py-3 text-slate-400">{{ forloop.counter }}</td>
+          <td class="px-4 py-3 font-medium text-accent-ink">
+            {{ entry.model_name }}
+            {% if entry.is_highlighted %}<span class="ml-1 text-amber-500">&#127942;</span>{% endif %}
+          </td>
+          {% for key in metric_keys %}
+          <td class="text-right px-4 py-3 {% if entry.metrics and best_values|dictsort:key and entry.metrics.key == best_values.key %}text-emerald-600 font-semibold{% endif %}">
+            {% if entry.metrics %}
+              {% for mk, mv in entry.metrics.items %}
+                {% if mk == key %}{{ mv }}{% endif %}
+              {% endfor %}
+            {% else %}-{% endif %}
+          </td>
+          {% endfor %}
+          <td class="px-4 py-3">
+            {% if entry.model %}
+            <a href="{{ entry.model.get_absolute_url }}" class="text-xs text-accent hover:underline">Try</a>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>

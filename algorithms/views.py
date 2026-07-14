@@ -1,7 +1,7 @@
 from django.db.models import Q
 from django.shortcuts import get_object_or_404, render
 
-from .models import Algorithm, Category, Field
+from .models import Algorithm, Benchmark, Category, Field, MLModel
 
 
 def _filtered_algorithms(request):
@@ -12,7 +12,6 @@ def _filtered_algorithms(request):
     )
     q = request.GET.get("q", "").strip()
     if q:
-        # v1 search: simple icontains. Swap for Postgres SearchVector in prod.
         qs = qs.filter(
             Q(name__icontains=q) | Q(blurb__icontains=q) | Q(author_handle__icontains=q)
         )
@@ -27,11 +26,15 @@ def _filtered_algorithms(request):
 
 def home(request):
     qs = Algorithm.objects.filter(status=Algorithm.Status.PUBLISHED).select_related("category")
+    ml_models = MLModel.objects.filter(status=MLModel.Status.PUBLISHED, is_public=True).select_related("researcher")[:6]
+    benchmarks = Benchmark.objects.filter(status=Benchmark.Status.PUBLISHED).select_related("researcher")[:3]
     context = {
         "featured": qs.order_by("-installs")[:6],
         "newest": qs.order_by("-created_at")[:4],
         "total": qs.count(),
         "categories": Category.objects.all(),
+        "ml_models": ml_models,
+        "benchmarks": benchmarks,
     }
     return render(request, "algorithms/home.html", context)
 
@@ -47,7 +50,6 @@ def explore(request):
         "fields": Field.choices,
         "count": qs.count(),
     }
-    # HTMX requests get just the results grid; full nav requests get the page.
     if request.headers.get("HX-Request"):
         return render(request, "algorithms/_results.html", context)
     return render(request, "algorithms/explore.html", context)

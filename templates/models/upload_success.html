@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Upload Successful · MedAlgo Hub{% endblock %}
+{% block breadcrumb %}Model Hub / Upload{% endblock %}
+
+{% block content %}
+<div class="max-w-lg mx-auto text-center py-16">
+  <div class="w-16 h-16 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-4 text-2xl">
+    &#10003;
+  </div>
+  <h1 class="text-2xl font-semibold text-accent-ink mb-2">Model Submitted</h1>
+  <p class="text-slate-500 mb-6">
+    <strong>{{ ml_model.name }}</strong> has been submitted for review.
+    An admin will review and publish it shortly.
+  </p>
+  <div class="flex gap-3 justify-center">
+    <a href="{% url 'algorithms:model_detail' ml_model.slug %}" class="px-4 py-2 rounded-lg bg-accent text-white text-sm hover:opacity-90">View Model</a>
+    <a href="{% url 'algorithms:model_upload' %}" class="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 text-sm hover:border-accent">Upload Another</a>
+  </div>
+</div>
+{% endblock %}

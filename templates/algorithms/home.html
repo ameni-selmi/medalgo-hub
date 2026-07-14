@@ -6,11 +6,13 @@
 <section class="mb-8">
   <h1 class="text-3xl font-semibold text-accent-ink">Share, read, and reproduce algorithms.</h1>
   <p class="text-slate-500 mt-2 max-w-2xl">
-    An open registry where researchers publish algorithms, others read about them and reproduce them.
-    We host the knowledge and the pointers — the code and data stay where they live.
+    An open registry where researchers publish algorithms, upload trained models, and run inference — all in one platform.
+    Browse the registry, run models on your images, and compare benchmarks.
   </p>
-  <div class="mt-4 flex gap-3">
+  <div class="mt-4 flex gap-3 flex-wrap">
     <a href="{% url 'algorithms:explore' %}" class="px-4 py-2 rounded-lg bg-accent text-white text-sm hover:opacity-90">Browse {{ total }} algorithms</a>
+    <a href="{% url 'algorithms:model_list' %}" class="px-4 py-2 rounded-lg border border-accent text-accent text-sm hover:bg-accent/5">Run Models</a>
+    <a href="{% url 'algorithms:benchmark_list' %}" class="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 text-sm hover:border-accent hover:text-accent">Benchmarks</a>
   </div>
 </section>
 
@@ -19,6 +21,30 @@
   <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-3">Most installed</h2>
   <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
     {% for algorithm in featured %}{% include "algorithms/_card.html" %}{% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if ml_models %}
+<section class="mb-8">
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400">Run Models</h2>
+    <a href="{% url 'algorithms:model_list' %}" class="text-xs text-accent hover:underline">View all</a>
+  </div>
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+    {% for m in ml_models %}{% include "models/_model_card.html" %}{% endfor %}
+  </div>
+</section>
+{% endif %}
+
+{% if benchmarks %}
+<section class="mb-8">
+  <div class="flex items-center justify-between mb-3">
+    <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400">Recent Benchmarks</h2>
+    <a href="{% url 'algorithms:benchmark_list' %}" class="text-xs text-accent hover:underline">View all</a>
+  </div>
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+    {% for b in benchmarks %}{% include "benchmarks/_benchmark_card.html" %}{% endfor %}
   </div>
 </section>
 {% endif %}

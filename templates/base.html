@@ -32,10 +32,23 @@
       <nav class="space-y-1 text-sm">
         <a href="{% url 'algorithms:home' %}" class="block px-3 py-2 rounded-lg hover:bg-slate-100">Home</a>
         <a href="{% url 'algorithms:explore' %}" class="block px-3 py-2 rounded-lg hover:bg-slate-100">Explore</a>
+        <a href="{% url 'algorithms:model_list' %}" class="block px-3 py-2 rounded-lg hover:bg-slate-100">Model Hub</a>
+        <a href="{% url 'algorithms:benchmark_list' %}" class="block px-3 py-2 rounded-lg hover:bg-slate-100">Benchmarks</a>
         <a href="/admin/" class="block px-3 py-2 rounded-lg hover:bg-slate-100 text-slate-400">Admin</a>
       </nav>
-      <p class="mt-8 text-xs text-slate-400 leading-relaxed">
-        A registry &amp; knowledge layer. We host metadata and pointers — never the code, weights, or data.
+      {% if user.is_authenticated %}
+      <div class="mt-6 text-xs text-slate-400">
+        Signed in as <span class="font-medium text-slate-600">{{ user.username }}</span>
+        <a href="{% url 'logout' %}" class="block mt-1 text-accent hover:underline">Sign out</a>
+      </div>
+      {% else %}
+      <div class="mt-6 space-y-1 text-sm">
+        <a href="{% url 'login' %}" class="block px-3 py-2 rounded-lg bg-accent/10 text-accent hover:bg-accent/20">Sign in</a>
+        <a href="{% url 'register' %}" class="block px-3 py-2 rounded-lg hover:bg-slate-100 text-slate-500">Register</a>
+      </div>
+      {% endif %}
+      <p class="mt-6 text-xs text-slate-400 leading-relaxed">
+        A registry, inference, &amp; benchmarking platform for medical imaging algorithms.
       </p>
     </aside>
 

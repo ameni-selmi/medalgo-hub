@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}{{ benchmark.name }} · MedAlgo Hub{% endblock %}
+{% block breadcrumb %}Benchmarks / {{ benchmark.name }}{% endblock %}
+
+{% block content %}
+<style>
+  @media print {
+    aside, header, nav { display: none !important; }
+    main { margin: 0; padding: 0; }
+    .no-print { display: none !important; }
+  }
+  .bar-animate { animation: growBar 0.6s ease-out forwards; }
+  @keyframes growBar { from { width: 0; } }
+</style>
+
+<div class="mb-6">
+  <div class="flex items-center gap-2 flex-wrap">
+    <h1 class="text-2xl font-semibold text-accent-ink">{{ benchmark.name }}</h1>
+    <span class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-accent/10 text-accent">{{ benchmark.get_modality_display }}</span>
+  </div>
+  <p class="text-sm text-slate-500 mt-1">
+    {{ benchmark.clinical_task }} · {{ benchmark.get_body_region_display }} ·
+    by <span class="font-medium">{{ benchmark.researcher.username }}</span>
+  </p>
+  {% if benchmark.description %}
+  <p class="text-slate-600 mt-3 max-w-3xl">{{ benchmark.description }}</p>
+  {% endif %}
+</div>
+
+<!-- Dataset Info -->
+<div class="bg-white rounded-xl border border-slate-200 p-4 mb-6 text-sm">
+  <h3 class="font-semibold text-accent-ink mb-2">Dataset</h3>
+  <dl class="grid grid-cols-2 md:grid-cols-4 gap-2">
+    <div><dt class="text-slate-500">Name</dt><dd class="font-medium">{{ benchmark.dataset_name }}</dd></div>
+    {% if benchmark.dataset_size %}<div><dt class="text-slate-500">Size</dt><dd>{{ benchmark.dataset_size }} samples</dd></div>{% endif %}
+    {% if benchmark.dataset_description %}<div class="col-span-2"><dt class="text-slate-500">Description</dt><dd>{{ benchmark.dataset_description }}</dd></div>{% endif %}
+  </dl>
+</div>
+
+<!-- Comparison Table -->
+{% include "benchmarks/_comparison_table.html" %}
+
+<!-- Bar Charts -->
+{% if metric_keys %}
+<div class="mt-8">
+  <h2 class="font-semibold text-accent-ink mb-4">Metric Comparison</h2>
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    {% for key in metric_keys %}
+    <div class="bg-white rounded-xl border border-slate-200 p-4">
+      <h3 class="text-sm font-medium text-slate-600 mb-3 capitalize">{{ key }}</h3>
+      <div class="space-y-2">
+        {% for entry in entries %}
+        {% if entry.metrics and key in entry.metrics %}
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-slate-500 w-28 truncate">{{ entry.model_name }}</span>
+          <div class="flex-1 h-5 rounded bg-slate-100 overflow-hidden">
+            {% with val=entry.metrics|dictsort:key %}
+            <div class="h-full rounded bar-animate {% if entry.is_highlighted %}bg-accent{% else %}bg-slate-400{% endif %}"
+                 style="width: {% widthratio entry.metrics.key 1 100 %}%"></div>
+            {% endwith %}
+          </div>
+          <span class="text-xs text-slate-600 w-12 text-right">{{ entry.metrics|dictsort:key|first|last|default_if_none:"-" }}</span>
+        </div>
+        {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- Pipeline Details -->
+<div class="mt-8">
+  <h2 class="font-semibold text-accent-ink mb-4">Pipeline Details</h2>
+  <div class="space-y-3">
+    {% for entry in entries %}
+    <details class="bg-white rounded-xl border border-slate-200">
+      <summary class="p-4 cursor-pointer text-sm font-medium text-accent-ink hover:bg-slate-50 rounded-xl">
+        {{ entry.model_name }}
+        {% if entry.is_highlighted %}<span class="ml-2 text-amber-500">&#127942;</span>{% endif %}
+      </summary>
+      <div class="px-4 pb-4 text-sm text-slate-600">
+        {% if entry.pipeline_description %}
+        <p class="mb-2">{{ entry.pipeline_description|linebreaks }}</p>
+        {% endif %}
+        {% if entry.training_details %}
+        <div class="mt-2">
+          <p class="font-medium text-slate-700 mb-1">Training Details</p>
+          <dl class="grid grid-cols-2 gap-1 text-xs">
+            {% for k, v in entry.training_details.items %}
+            <div><dt class="text-slate-500">{{ k }}</dt><dd>{{ v }}</dd></div>
+            {% endfor %}
+          </dl>
+        </div>
+        {% endif %}
+        {% if entry.model %}
+        <a href="{{ entry.model.get_absolute_url }}" class="inline-block mt-3 text-accent text-sm hover:underline">Try this model &#8594;</a>
+        {% endif %}
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+</div>
+
+{% if user == benchmark.researcher %}
+<div class="mt-6 no-print">
+  <a href="{% url 'algorithms:benchmark_edit' benchmark.slug %}" class="text-sm text-accent hover:underline">Edit Benchmark</a>
+</div>
+{% endif %}
+{% endblock %}

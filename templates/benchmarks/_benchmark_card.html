@@ -1,0 +1,14 @@
+<a href="{{ b.get_absolute_url }}"
+   class="block bg-white rounded-xl border border-slate-200 p-4 hover:border-accent hover:shadow-sm transition">
+  <div class="flex items-start justify-between gap-2">
+    <h3 class="font-semibold text-accent-ink leading-tight">{{ b.name }}</h3>
+    <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-accent/10 text-accent shrink-0">{{ b.get_modality_display }}</span>
+  </div>
+  <p class="text-xs text-slate-500 mt-0.5">{{ b.clinical_task }}</p>
+  <p class="text-sm text-slate-600 mt-2 line-clamp-2">{{ b.description }}</p>
+  <div class="flex items-center gap-3 mt-3 text-xs text-slate-400">
+    <span>{{ b.entries.count }} models</span>
+    <span>{{ b.dataset_name }}</span>
+    <span class="ml-auto font-mono">{{ b.researcher.username }}</span>
+  </div>
+</a>

@@ -1,0 +1,69 @@
+<!-- Disclaimer -->
+<div class="bg-amber-50 border border-amber-200 rounded-lg p-2 mb-4 text-xs text-amber-800">
+  Research use only. Not for clinical diagnosis.
+</div>
+
+<div class="bg-white rounded-xl border border-slate-200 p-5">
+  <div class="flex items-center justify-between mb-4">
+    <h3 class="font-semibold text-accent-ink">Inference Result</h3>
+    <span class="text-xs text-slate-400">{{ run.inference_time_ms }}ms · <a href="{% url 'algorithms:run_result' run.pk %}" class="text-accent hover:underline">Permalink</a></span>
+  </div>
+
+  {% if run.status == "completed" %}
+  <!-- Predicted Label -->
+  <div class="text-center mb-5">
+    <p class="text-3xl font-bold text-accent-ink">{{ run.result_label }}</p>
+    <div class="mt-2 inline-flex items-center gap-2">
+      <div class="w-48 h-3 rounded-full bg-slate-100 overflow-hidden">
+        <div class="h-full rounded-full {% if run.result_confidence >= 0.8 %}bg-emerald-500{% elif run.result_confidence >= 0.5 %}bg-amber-500{% else %}bg-rose-500{% endif %}"
+             style="width: {{ run.result_confidence|floatformat:0 }}%"></div>
+      </div>
+      <span class="text-sm font-medium {% if run.result_confidence >= 0.8 %}text-emerald-600{% elif run.result_confidence >= 0.5 %}text-amber-600{% else %}text-rose-600{% endif %}">
+        {% widthratio run.result_confidence 1 100 %}%
+      </span>
+    </div>
+  </div>
+
+  <!-- Probability Distribution -->
+  {% if run.result_probabilities %}
+  <div class="mb-5">
+    <h4 class="text-sm font-medium text-slate-600 mb-2">Probability Distribution</h4>
+    <div class="space-y-2">
+      {% for label, prob in run.result_probabilities.items %}
+      <div class="flex items-center gap-3">
+        <span class="text-sm text-slate-600 w-32 truncate">{{ label }}</span>
+        <div class="flex-1 h-5 rounded bg-slate-100 overflow-hidden">
+          <div class="h-full rounded {% if label == run.result_label %}bg-accent{% else %}bg-slate-300{% endif %} transition-all duration-500"
+               style="width: {% widthratio prob 1 100 %}%"></div>
+        </div>
+        <span class="text-xs text-slate-500 w-14 text-right">{% widthratio prob 1 100 %}%</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- GradCAM + Original side by side -->
+  {% if run.gradcam_image %}
+  <div class="mt-4">
+    <h4 class="text-sm font-medium text-slate-600 mb-2">GradCAM Visualization</h4>
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <p class="text-xs text-slate-400 mb-1">Original</p>
+        <img src="{{ run.input_image.url }}" alt="Input" class="w-full rounded-lg border border-slate-200">
+      </div>
+      <div>
+        <p class="text-xs text-slate-400 mb-1">GradCAM Overlay</p>
+        <img src="{{ run.gradcam_image.url }}" alt="GradCAM" class="w-full rounded-lg border border-slate-200">
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% elif run.status == "failed" %}
+  <div class="text-center py-4">
+    <p class="text-rose-600 font-medium">Inference failed</p>
+    <p class="text-sm text-slate-500 mt-1">{{ run.error_message }}</p>
+  </div>
+  {% endif %}
+</div>

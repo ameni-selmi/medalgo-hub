@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Model Hub · MedAlgo Hub{% endblock %}
+{% block breadcrumb %}Model Hub{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-1">
+  <h1 class="text-2xl font-semibold text-accent-ink">Model Hub</h1>
+  {% if user.is_authenticated %}
+  <a href="{% url 'algorithms:model_upload' %}" class="px-4 py-2 rounded-lg bg-accent text-white text-sm hover:opacity-90">Upload Model</a>
+  {% endif %}
+</div>
+<p class="text-slate-500 mb-5">Browse runnable ML models. Upload an image and get classification results instantly.</p>
+
+<form hx-get="{% url 'algorithms:model_list' %}"
+      hx-target="#results"
+      hx-swap="outerHTML"
+      hx-trigger="keyup changed delay:300ms from:input[name='q'], change from:select"
+      hx-push-url="true"
+      class="bg-white rounded-xl border border-slate-200 p-3 mb-5 flex flex-wrap gap-3 items-center">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search models..."
+         class="flex-1 min-w-[200px] px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm">
+  <select name="modality" class="px-3 py-2 rounded-lg border border-slate-200 text-sm">
+    <option value="">All modalities</option>
+    {% for value, label in modalities %}
+      <option value="{{ value }}" {% if value == active_modality %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <select name="body_region" class="px-3 py-2 rounded-lg border border-slate-200 text-sm">
+    <option value="">All regions</option>
+    {% for value, label in body_regions %}
+      <option value="{{ value }}" {% if value == active_body_region %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <select name="architecture" class="px-3 py-2 rounded-lg border border-slate-200 text-sm">
+    <option value="">All architectures</option>
+    {% for value, label in architectures %}
+      <option value="{{ value }}" {% if value == active_architecture %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <span class="htmx-indicator text-xs text-slate-400">searching...</span>
+</form>
+
+{% include "models/_results_grid.html" %}
+{% endblock %}

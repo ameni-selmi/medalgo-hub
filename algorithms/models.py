@@ -157,6 +157,237 @@ class Algorithm(models.Model):
         return self.license.lower() == "commercial"
 
 
+class ResearcherProfile(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="researcher_profile"
+    )
+    institution = models.CharField(max_length=200)
+    orcid = models.CharField(max_length=40, blank=True)
+    bio = models.TextField(blank=True)
+    is_approved = models.BooleanField(default=False)
+
+    def __str__(self):
+        return f"{self.user.username} ({self.institution})"
+
+
+class MLModel(models.Model):
+    class Architecture(models.TextChoices):
+        RESNET18 = "resnet18", "ResNet-18"
+        RESNET34 = "resnet34", "ResNet-34"
+        RESNET50 = "resnet50", "ResNet-50"
+        RESNET101 = "resnet101", "ResNet-101"
+        RESNET152 = "resnet152", "ResNet-152"
+        EFFICIENTNET_B0 = "efficientnet_b0", "EfficientNet-B0"
+        EFFICIENTNET_B1 = "efficientnet_b1", "EfficientNet-B1"
+        EFFICIENTNET_B2 = "efficientnet_b2", "EfficientNet-B2"
+        EFFICIENTNET_B3 = "efficientnet_b3", "EfficientNet-B3"
+        EFFICIENTNET_B4 = "efficientnet_b4", "EfficientNet-B4"
+        EFFICIENTNET_B5 = "efficientnet_b5", "EfficientNet-B5"
+        EFFICIENTNET_B6 = "efficientnet_b6", "EfficientNet-B6"
+        EFFICIENTNET_B7 = "efficientnet_b7", "EfficientNet-B7"
+        VGG16 = "vgg16", "VGG-16"
+        VGG19 = "vgg19", "VGG-19"
+        DENSENET121 = "densenet121", "DenseNet-121"
+        DENSENET169 = "densenet169", "DenseNet-169"
+        DENSENET201 = "densenet201", "DenseNet-201"
+        MOBILENET_V2 = "mobilenet_v2", "MobileNet V2"
+        MOBILENET_V3_SMALL = "mobilenet_v3_small", "MobileNet V3 Small"
+        MOBILENET_V3_LARGE = "mobilenet_v3_large", "MobileNet V3 Large"
+        INCEPTION_V3 = "inception_v3", "Inception V3"
+        VIT_B_16 = "vit_b_16", "ViT-B/16"
+        VIT_B_32 = "vit_b_32", "ViT-B/32"
+        VIT_L_16 = "vit_l_16", "ViT-L/16"
+        VIT_L_32 = "vit_l_32", "ViT-L/32"
+        SWIN_T = "swin_t", "Swin-T"
+        SWIN_S = "swin_s", "Swin-S"
+        SWIN_B = "swin_b", "Swin-B"
+        CUSTOM = "custom", "Custom"
+
+    class Modality(models.TextChoices):
+        CT = "ct", "CT"
+        MRI = "mri", "MRI"
+        XRAY = "xray", "X-Ray"
+        ULTRASOUND = "ultrasound", "Ultrasound"
+        ENDOSCOPY = "endoscopy", "Endoscopy"
+        DERMOSCOPY = "dermoscopy", "Dermoscopy"
+        FUNDOSCOPY = "fundoscopy", "Fundoscopy"
+        HISTOPATHOLOGY = "histopathology", "Histopathology"
+        PET = "pet", "PET"
+        OTHER = "other", "Other"
+
+    class BodyRegion(models.TextChoices):
+        HEAD = "head", "Head"
+        CHEST = "chest", "Chest"
+        ABDOMEN = "abdomen", "Abdomen"
+        PELVIS = "pelvis", "Pelvis"
+        SPINE = "spine", "Spine"
+        UPPER_EXTREMITY = "upper_extremity", "Upper Extremity"
+        LOWER_EXTREMITY = "lower_extremity", "Lower Extremity"
+        SKIN = "skin", "Skin"
+        EYE = "eye", "Eye"
+        WHOLE_BODY = "whole_body", "Whole Body"
+        OTHER = "other", "Other"
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        IN_REVIEW = "in_review", "In Review"
+        PUBLISHED = "published", "Published"
+        REJECTED = "rejected", "Rejected"
+
+    slug = models.SlugField(max_length=120, unique=True)
+    name = models.CharField(max_length=200)
+    researcher = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="ml_models"
+    )
+    description = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    architecture = models.CharField(max_length=32, choices=Architecture.choices)
+    num_classes = models.PositiveIntegerField()
+    class_labels = models.JSONField(help_text='List of class label strings, e.g. ["Normal", "Stroke"]')
+    input_size = models.PositiveIntegerField(default=224)
+    input_channels = models.PositiveIntegerField(default=3)
+
+    modality = models.CharField(max_length=24, choices=Modality.choices)
+    body_region = models.CharField(max_length=24, choices=BodyRegion.choices)
+    clinical_task = models.CharField(max_length=200)
+    tags = models.JSONField(default=list, blank=True)
+
+    model_file = models.FileField(upload_to="models/pt_files/")
+    model_version = models.CharField(max_length=32, default="1.0.0")
+
+    custom_architecture_code = models.TextField(blank=True)
+
+    gradcam_enabled = models.BooleanField(default=True)
+    gradcam_target_layer = models.CharField(max_length=120, blank=True)
+    xai_script = models.TextField(blank=True)
+
+    preprocessing_mean = models.JSONField(default=list, blank=True)
+    preprocessing_std = models.JSONField(default=list, blank=True)
+    preprocessing_notes = models.TextField(blank=True)
+
+    reported_accuracy = models.FloatField(null=True, blank=True)
+    reported_auc = models.FloatField(null=True, blank=True)
+    reported_f1 = models.FloatField(null=True, blank=True)
+    reported_dataset = models.CharField(max_length=200, blank=True)
+    reported_dataset_size = models.PositiveIntegerField(null=True, blank=True)
+
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    is_public = models.BooleanField(default=True)
+
+    example_input = models.ImageField(upload_to="models/examples/", blank=True)
+    example_expected_label = models.CharField(max_length=120, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["status"]),
+            models.Index(fields=["modality", "body_region"]),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.name)[:120]
+        if not self.preprocessing_mean:
+            self.preprocessing_mean = [0.485, 0.456, 0.406]
+        if not self.preprocessing_std:
+            self.preprocessing_std = [0.229, 0.224, 0.225]
+        super().save(*args, **kwargs)
+
+    def get_absolute_url(self):
+        return reverse("algorithms:model_detail", args=[self.slug])
+
+
+class InferenceRun(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    model = models.ForeignKey(MLModel, on_delete=models.CASCADE, related_name="runs")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="inference_runs"
+    )
+    input_image = models.ImageField(upload_to="runs/inputs/")
+    created_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    result_label = models.CharField(max_length=200, blank=True)
+    result_confidence = models.FloatField(null=True, blank=True)
+    result_probabilities = models.JSONField(null=True, blank=True)
+    gradcam_image = models.ImageField(upload_to="runs/gradcam/", blank=True)
+    error_message = models.TextField(blank=True)
+    inference_time_ms = models.PositiveIntegerField(null=True, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Run #{self.pk} on {self.model.name}"
+
+
+class Benchmark(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        IN_REVIEW = "in_review", "In Review"
+        PUBLISHED = "published", "Published"
+        REJECTED = "rejected", "Rejected"
+
+    slug = models.SlugField(max_length=120, unique=True)
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    researcher = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="benchmarks"
+    )
+    clinical_task = models.CharField(max_length=200)
+    modality = models.CharField(max_length=24, choices=MLModel.Modality.choices)
+    body_region = models.CharField(max_length=24, choices=MLModel.BodyRegion.choices)
+    dataset_name = models.CharField(max_length=200)
+    dataset_description = models.TextField(blank=True)
+    dataset_size = models.PositiveIntegerField(null=True, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.name)[:120]
+        super().save(*args, **kwargs)
+
+    def get_absolute_url(self):
+        return reverse("algorithms:benchmark_detail", args=[self.slug])
+
+
+class BenchmarkEntry(models.Model):
+    benchmark = models.ForeignKey(Benchmark, on_delete=models.CASCADE, related_name="entries")
+    model = models.ForeignKey(MLModel, on_delete=models.SET_NULL, null=True, blank=True, related_name="benchmark_entries")
+    model_name = models.CharField(max_length=200)
+    pipeline_description = models.TextField(blank=True)
+    order = models.PositiveIntegerField(default=0)
+    metrics = models.JSONField(default=dict, blank=True)
+    confusion_matrix = models.JSONField(null=True, blank=True)
+    roc_data = models.JSONField(null=True, blank=True)
+    training_details = models.JSONField(default=dict, blank=True)
+    is_highlighted = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["order"]
+
+    def __str__(self):
+        return f"{self.model_name} in {self.benchmark.name}"
+
+
 class Version(models.Model):
     """An immutable release of an algorithm, pinned to a source commit."""
 

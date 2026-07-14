@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}{{ ml_model.name }} · MedAlgo Hub{% endblock %}
+{% block breadcrumb %}Model Hub / {{ ml_model.name }}{% endblock %}
+
+{% block content %}
+<!-- Disclaimer -->
+<div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-5 text-sm text-amber-800">
+  <strong>Research use only.</strong> Not for clinical diagnosis. Results have not been validated for medical decision-making.
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  <!-- Main column -->
+  <div class="lg:col-span-2 space-y-6">
+    <!-- Header -->
+    <div>
+      <div class="flex items-center gap-2 flex-wrap">
+        <h1 class="text-2xl font-semibold text-accent-ink">{{ ml_model.name }}</h1>
+        <span class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-accent/10 text-accent">{{ ml_model.get_modality_display }}</span>
+        <span class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">{{ ml_model.get_architecture_display }}</span>
+        {% if ml_model.status == "published" %}
+        <span class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600">Published</span>
+        {% elif ml_model.status == "in_review" %}
+        <span class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-amber-50 text-amber-600">In Review</span>
+        {% endif %}
+      </div>
+      <p class="text-sm text-slate-500 mt-1">
+        {{ ml_model.get_body_region_display }} · {{ ml_model.clinical_task }} ·
+        by <span class="font-medium">{{ ml_model.researcher.username }}</span>
+        {% if ml_model.researcher.researcher_profile.institution %} ({{ ml_model.researcher.researcher_profile.institution }}){% endif %}
+      </p>
+    </div>
+
+    <!-- Description -->
+    {% if ml_model.description %}
+    <div class="bg-white rounded-xl border border-slate-200 p-5 prose prose-sm max-w-none">
+      {{ ml_model.description|linebreaks }}
+    </div>
+    {% endif %}
+
+    <!-- Try It Section -->
+    {% if ml_model.status == "published" %}
+    <div class="bg-gradient-to-br from-accent/5 to-blue-50 rounded-xl border-2 border-accent/20 p-6">
+      <h2 class="text-lg font-semibold text-accent-ink mb-3">Try It — Run Inference</h2>
+      <p class="text-sm text-slate-600 mb-4">Upload a medical image and get classification results instantly.</p>
+
+      <form hx-post="{% url 'algorithms:model_run' ml_model.slug %}"
+            hx-target="#inference-result"
+            hx-swap="innerHTML"
+            hx-indicator="#inference-spinner"
+            hx-encoding="multipart/form-data"
+            class="space-y-4">
+        {% csrf_token %}
+        <div class="relative">
+          <label class="block w-full border-2 border-dashed border-accent/30 rounded-xl p-8 text-center cursor-pointer hover:border-accent/60 hover:bg-white/50 transition" id="drop-zone">
+            <input type="file" name="image" accept="image/*,.dcm,.nii,.nii.gz" class="hidden" id="file-input"
+                   onchange="document.getElementById('file-name').textContent = this.files[0]?.name || 'No file selected'; document.getElementById('file-size').textContent = this.files[0] ? (this.files[0].size / 1024 / 1024).toFixed(2) + ' MB' : '';">
+            <div class="text-accent text-3xl mb-2">+</div>
+            <p class="text-sm text-slate-600">Drag & drop or click to upload</p>
+            <p class="text-xs text-slate-400 mt-1">JPEG, PNG, TIFF, BMP, DICOM, NIfTI</p>
+          </label>
+          <p class="text-sm mt-2"><span id="file-name" class="text-slate-600"></span> <span id="file-size" class="text-xs text-slate-400"></span></p>
+        </div>
+        <div class="flex gap-3">
+          <button type="submit" class="px-6 py-2.5 rounded-lg bg-accent text-white text-sm font-medium hover:opacity-90">
+            Run Inference
+          </button>
+          {% if ml_model.example_input %}
+          <button type="button"
+                  hx-post="{% url 'algorithms:model_demo' ml_model.slug %}"
+                  hx-target="#inference-result"
+                  hx-swap="innerHTML"
+                  hx-indicator="#inference-spinner"
+                  class="px-6 py-2.5 rounded-lg border border-accent text-accent text-sm font-medium hover:bg-accent/5">
+            Try Demo
+          </button>
+          {% endif %}
+        </div>
+      </form>
+
+      <div id="inference-spinner" class="htmx-indicator mt-4">
+        <div class="flex items-center gap-3 text-accent">
+          <svg class="animate-spin h-5 w-5" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>
+          <span class="text-sm">Running inference...</span>
+        </div>
+      </div>
+
+      <div id="inference-result" class="mt-4"></div>
+    </div>
+    {% endif %}
+
+    <!-- Benchmarks featuring this model -->
+    {% if benchmarks %}
+    <div class="bg-white rounded-xl border border-slate-200 p-5">
+      <h2 class="font-semibold text-accent-ink mb-3">Featured in Benchmarks</h2>
+      <div class="space-y-2">
+        {% for be in benchmarks %}
+        <a href="{{ be.benchmark.get_absolute_url }}" class="block p-3 rounded-lg border border-slate-100 hover:border-accent transition text-sm">
+          <span class="font-medium text-accent-ink">{{ be.benchmark.name }}</span>
+          <span class="text-slate-400 ml-2">{{ be.benchmark.dataset_name }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Sidebar -->
+  <div class="space-y-4">
+    <!-- Model Card -->
+    <div class="bg-white rounded-xl border border-slate-200 p-4">
+      <h3 class="text-sm font-semibold text-accent-ink mb-2">Model Card</h3>
+      <dl class="text-sm space-y-1.5">
+        <div class="flex justify-between"><dt class="text-slate-500">Architecture</dt><dd>{{ ml_model.get_architecture_display }}</dd></div>
+        <div class="flex justify-between"><dt class="text-slate-500">Classes</dt><dd>{{ ml_model.num_classes }}</dd></div>
+        <div class="flex justify-between"><dt class="text-slate-500">Input size</dt><dd>{{ ml_model.input_size }}x{{ ml_model.input_size }}</dd></div>
+        <div class="flex justify-between"><dt class="text-slate-500">Channels</dt><dd>{{ ml_model.input_channels }}</dd></div>
+        <div class="flex justify-between"><dt class="text-slate-500">Version</dt><dd>{{ ml_model.model_version }}</dd></div>
+        <div class="flex justify-between"><dt class="text-slate-500">GradCAM</dt><dd>{{ ml_model.gradcam_enabled|yesno:"Enabled,Disabled" }}</dd></div>
+      </dl>
+      <div class="mt-3 pt-3 border-t border-slate-100">
+        <p class="text-xs text-slate-500 font-medium mb-1">Class Labels</p>
+        <div class="flex flex-wrap gap-1">
+          {% for label in ml_model.class_labels %}
+          <span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">{{ label }}</span>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Reported Performance -->
+    {% if ml_model.reported_accuracy or ml_model.reported_auc or ml_model.reported_f1 %}
+    <div class="bg-white rounded-xl border border-slate-200 p-4">
+      <h3 class="text-sm font-semibold text-accent-ink mb-2">Reported Performance</h3>
+      <dl class="text-sm space-y-1.5">
+        {% if ml_model.reported_accuracy %}<div class="flex justify-between"><dt class="text-slate-500">Accuracy</dt><dd>{{ ml_model.reported_accuracy|floatformat:1 }}%</dd></div>{% endif %}
+        {% if ml_model.reported_auc %}<div class="flex justify-between"><dt class="text-slate-500">AUC</dt><dd>{{ ml_model.reported_auc|floatformat:3 }}</dd></div>{% endif %}
+        {% if ml_model.reported_f1 %}<div class="flex justify-between"><dt class="text-slate-500">F1</dt><dd>{{ ml_model.reported_f1|floatformat:3 }}</dd></div>{% endif %}
+        {% if ml_model.reported_dataset %}<div class="flex justify-between"><dt class="text-slate-500">Dataset</dt><dd class="text-right">{{ ml_model.reported_dataset }}</dd></div>{% endif %}
+        {% if ml_model.reported_dataset_size %}<div class="flex justify-between"><dt class="text-slate-500">Dataset size</dt><dd>{{ ml_model.reported_dataset_size }}</dd></div>{% endif %}
+      </dl>
+    </div>
+    {% endif %}
+
+    <!-- Download -->
+    {% if ml_model.model_file %}
+    <div class="bg-white rounded-xl border border-slate-200 p-4">
+      <h3 class="text-sm font-semibold text-accent-ink mb-2">Download</h3>
+      <a href="{{ ml_model.model_file.url }}" class="block text-sm text-accent hover:underline">Download .pt file</a>
+    </div>
+    {% endif %}
+
+    {% if ml_model.tags %}
+    <div class="bg-white rounded-xl border border-slate-200 p-4">
+      <h3 class="text-sm font-semibold text-accent-ink mb-2">Tags</h3>
+      <div class="flex flex-wrap gap-1">
+        {% for tag in ml_model.tags %}
+        <span class="text-xs px-2 py-0.5 rounded-full bg-accent/10 text-accent">{{ tag }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    {% if user == ml_model.researcher %}
+    <a href="{% url 'algorithms:model_edit' ml_model.slug %}" class="block text-center text-sm px-4 py-2 rounded-lg border border-slate-200 text-slate-500 hover:border-accent hover:text-accent transition">Edit Model</a>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+if (dropZone) {
+  ['dragover','dragenter'].forEach(e => dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.add('border-accent'); }));
+  ['dragleave','drop'].forEach(e => dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.remove('border-accent'); }));
+  dropZone.addEventListener('drop', ev => {
+    if (ev.dataTransfer.files.length) {
+      fileInput.files = ev.dataTransfer.files;
+      document.getElementById('file-name').textContent = ev.dataTransfer.files[0].name;
+      document.getElementById('file-size').textContent = (ev.dataTransfer.files[0].size/1024/1024).toFixed(2)+' MB';
+    }
+  });
+}
+</script>
+{% endblock %}

@@ -1,0 +1,18 @@
+<a href="{{ m.get_absolute_url }}"
+   class="block bg-white rounded-xl border border-slate-200 p-4 hover:border-accent hover:shadow-sm transition">
+  <div class="flex items-start justify-between gap-2">
+    <h3 class="font-semibold text-accent-ink leading-tight">{{ m.name }}</h3>
+    <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-accent/10 text-accent shrink-0">{{ m.get_modality_display }}</span>
+  </div>
+  <p class="text-xs text-slate-500 mt-0.5">
+    {{ m.get_architecture_display }} · {{ m.get_body_region_display }} · {{ m.num_classes }} classes
+  </p>
+  <p class="text-sm text-slate-600 mt-2 line-clamp-2">{{ m.clinical_task }}</p>
+  <div class="flex items-center gap-3 mt-3 text-xs text-slate-400 flex-wrap">
+    {% if m.reported_accuracy %}<span>Acc: {{ m.reported_accuracy|floatformat:1 }}%</span>{% endif %}
+    <span class="font-mono">{{ m.researcher.username }}</span>
+    {% if m.example_input %}
+    <span class="ml-auto px-2 py-0.5 rounded bg-emerald-50 text-emerald-600 text-[10px] uppercase">Demo</span>
+    {% endif %}
+  </div>
+</a>
