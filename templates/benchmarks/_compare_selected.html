@@ -1,0 +1,30 @@
+<div class="bg-white rounded-xl border border-slate-200 p-5">
+  <h3 class="font-semibold text-accent-ink mb-4">Side-by-Side Comparison</h3>
+
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-slate-200">
+          <th class="text-left px-4 py-2 text-slate-500">Metric</th>
+          {% for entry in entries %}
+          <th class="text-right px-4 py-2 font-medium text-accent-ink">{{ entry.model_name }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for key in metric_keys %}
+        <tr class="border-b border-slate-100">
+          <td class="px-4 py-2 text-slate-600 capitalize">{{ key }}</td>
+          {% for entry in entries %}
+          <td class="text-right px-4 py-2">
+            {% if entry.metrics %}
+              {% for mk, mv in entry.metrics.items %}{% if mk == key %}{{ mv }}{% endif %}{% endfor %}
+            {% else %}-{% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>

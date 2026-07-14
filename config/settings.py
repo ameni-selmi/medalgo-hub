@@ -124,6 +124,18 @@ STORAGES = {
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+# --- Media files (uploaded models, images, results) ---------------------
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+# Model inference settings
+MAX_MODEL_SIZE_MB = 500
+MODEL_CACHE_SIZE = 5
+INFERENCE_TIMEOUT_SECONDS = 60
+
+DATA_UPLOAD_MAX_MEMORY_SIZE = 500 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 500 * 1024 * 1024
+
 
 # --- Domain constants ---------------------------------------------------
 # Major.minor core lines the registry tracks compatibility against.

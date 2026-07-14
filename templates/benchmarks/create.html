@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}{% if editing %}Edit{% else %}Create{% endif %} Benchmark · MedAlgo Hub{% endblock %}
+{% block breadcrumb %}Benchmarks / {% if editing %}Edit{% else %}Create{% endif %}{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-semibold text-accent-ink mb-1">{% if editing %}Edit Benchmark{% else %}Create a Benchmark{% endif %}</h1>
+<p class="text-slate-500 mb-5">Compare multiple models on the same task and dataset.</p>
+
+{% if error %}
+<div class="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-5 text-sm text-rose-700">{{ error }}</div>
+{% endif %}
+
+{% if form %}
+<form method="post" class="space-y-6 max-w-3xl">
+  {% csrf_token %}
+
+  {% if form.errors %}
+  <div class="bg-rose-50 border border-rose-200 rounded-xl p-4 text-sm text-rose-700">{{ form.errors }}</div>
+  {% endif %}
+
+  <div class="bg-white rounded-xl border border-slate-200 p-5">
+    <h2 class="font-semibold text-accent-ink mb-4">Benchmark Information</h2>
+    <div class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Name</label>
+        <input type="text" name="name" value="{{ form.name.value|default_if_none:'' }}" required
+               class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Description</label>
+        <textarea name="description" rows="4"
+                  class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm">{{ form.description.value|default_if_none:'' }}</textarea>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Clinical Task</label>
+        <input type="text" name="clinical_task" value="{{ form.clinical_task.value|default_if_none:'' }}" required
+               class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm">
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Modality</label>
+          <select name="modality" required class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+            {% for value, label in form.modality.field.choices %}
+            <option value="{{ value }}" {% if form.modality.value == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Body Region</label>
+          <select name="body_region" required class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+            {% for value, label in form.body_region.field.choices %}
+            <option value="{{ value }}" {% if form.body_region.value == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Dataset Name</label>
+          <input type="text" name="dataset_name" value="{{ form.dataset_name.value|default_if_none:'' }}" required
+                 class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Dataset Size</label>
+          <input type="number" name="dataset_size" value="{{ form.dataset_size.value|default_if_none:'' }}"
+                 class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+        </div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Dataset Description</label>
+        <textarea name="dataset_description" rows="3"
+                  class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">{{ form.dataset_description.value|default_if_none:'' }}</textarea>
+      </div>
+    </div>
+  </div>
+
+  <!-- Entries -->
+  <div class="bg-white rounded-xl border border-slate-200 p-5" id="entries-container">
+    <h2 class="font-semibold text-accent-ink mb-4">Model Entries</h2>
+    <div id="entry-list" class="space-y-4">
+      <div class="entry-row border border-slate-100 rounded-lg p-4" data-index="0">
+        <div class="grid grid-cols-2 gap-4 mb-3">
+          <div>
+            <label class="block text-xs font-medium text-slate-700 mb-1">Model Name</label>
+            <input type="text" name="entry-0-model_name" required
+                   class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" placeholder="e.g. ResNet18 (ImageNet pretrain)">
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-slate-700 mb-1">Link to Platform Model (optional)</label>
+            <select name="entry-0-model" class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+              <option value="">-- None --</option>
+              {% for m in published_models %}
+              <option value="{{ m.pk }}">{{ m.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="block text-xs font-medium text-slate-700 mb-1">Pipeline Description</label>
+          <textarea name="entry-0-pipeline_description" rows="2"
+                    class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"></textarea>
+        </div>
+        <div class="mb-3">
+          <label class="block text-xs font-medium text-slate-700 mb-1">Metrics (one per line: name: value)</label>
+          <textarea name="entry-0-metrics_text" rows="3"
+                    class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm font-mono"
+                    placeholder="accuracy: 0.92&#10;auc: 0.96&#10;f1: 0.91"></textarea>
+        </div>
+        <label class="flex items-center gap-2 text-xs">
+          <input type="checkbox" name="entry-0-is_highlighted" class="rounded">
+          Highlight as best
+        </label>
+      </div>
+    </div>
+    <button type="button" onclick="addEntry()" class="mt-4 text-sm text-accent hover:underline">+ Add Model Entry</button>
+  </div>
+
+  <button type="submit" class="px-6 py-3 rounded-lg bg-accent text-white font-medium hover:opacity-90">
+    {% if editing %}Save Changes{% else %}Submit for Review{% endif %}
+  </button>
+</form>
+
+<script>
+let entryCount = 1;
+function addEntry() {
+  const idx = entryCount++;
+  const html = `
+  <div class="entry-row border border-slate-100 rounded-lg p-4" data-index="${idx}">
+    <div class="grid grid-cols-2 gap-4 mb-3">
+      <div>
+        <label class="block text-xs font-medium text-slate-700 mb-1">Model Name</label>
+        <input type="text" name="entry-${idx}-model_name" required class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-700 mb-1">Link to Platform Model</label>
+        <select name="entry-${idx}-model" class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+          <option value="">-- None --</option>
+          {% for m in published_models %}<option value="{{ m.pk }}">{{ m.name }}</option>{% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="mb-3">
+      <label class="block text-xs font-medium text-slate-700 mb-1">Pipeline Description</label>
+      <textarea name="entry-${idx}-pipeline_description" rows="2" class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"></textarea>
+    </div>
+    <div class="mb-3">
+      <label class="block text-xs font-medium text-slate-700 mb-1">Metrics</label>
+      <textarea name="entry-${idx}-metrics_text" rows="3" class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm font-mono" placeholder="accuracy: 0.92&#10;auc: 0.96"></textarea>
+    </div>
+    <label class="flex items-center gap-2 text-xs">
+      <input type="checkbox" name="entry-${idx}-is_highlighted" class="rounded"> Highlight as best
+    </label>
+  </div>`;
+  document.getElementById('entry-list').insertAdjacentHTML('beforeend', html);
+}
+</script>
+{% endif %}
+{% endblock %}

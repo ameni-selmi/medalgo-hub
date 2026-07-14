@@ -1,0 +1,3537 @@
+From 96299c93a166b468a9586fc3a039ff7d4a256426 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 14 Jul 2026 12:06:24 +0000
+Subject: [PATCH] Add model execution, inference engine, and benchmarking
+ framework
+
+Phase 1: Live inference platform
+- New models: ResearcherProfile, MLModel, InferenceRun with full medical
+  imaging metadata (modality, body region, architecture choices, etc.)
+- PyTorch inference engine with model loading, preprocessing (JPEG/PNG/
+  DICOM/NIfTI), softmax classification, and LRU model cache
+- GradCAM explainability with auto-detected target layers per architecture
+- Model upload with server-side validation (loads model + runs dummy pass)
+- HTMX-powered "Try It" inference UI with drag-and-drop, demo button,
+  probability bars, and GradCAM overlay display
+- Rate limiting (20 runs/IP/hour), research-use disclaimers
+- Auth: login, register with ResearcherProfile, approval gating
+
+Phase 2: Benchmarking framework
+- New models: Benchmark, BenchmarkEntry with flexible JSON metrics
+- Sortable comparison tables, pipeline detail accordions
+- Side-by-side model comparison view
+- Integration: models link to benchmarks they appear in
+
+Seed data: 3 real PyTorch models (ResNet18, DenseNet121, EfficientNet-B0)
+with random weights, demo images, and 2 benchmarks with 7 entries total.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01M5TpWhJvmqo5SMubVpxoqF
+---
+ algorithms/admin.py                           |  66 ++-
+ algorithms/forms.py                           | 182 ++++++++
+ algorithms/inference.py                       | 286 +++++++++++++
+ .../management/commands/cleanup_old_runs.py   |  35 ++
+ algorithms/management/commands/seed.py        | 241 ++++++++++-
+ ...el_inferencerun_benchmarkentry_and_more.py | 398 ++++++++++++++++++
+ algorithms/models.py                          | 231 ++++++++++
+ algorithms/urls.py                            |  19 +
+ algorithms/views.py                           |   8 +-
+ algorithms/views_benchmark.py                 | 173 ++++++++
+ algorithms/views_models.py                    | 284 +++++++++++++
+ config/settings.py                            |  12 +
+ config/urls.py                                |  11 +
+ requirements.txt                              |   6 +
+ templates/algorithms/home.html                |  32 +-
+ templates/base.html                           |  17 +-
+ templates/benchmarks/_benchmark_card.html     |  14 +
+ templates/benchmarks/_compare_selected.html   |  30 ++
+ templates/benchmarks/_comparison_table.html   |  49 +++
+ templates/benchmarks/create.html              | 158 +++++++
+ templates/benchmarks/detail.html              | 111 +++++
+ templates/benchmarks/list.html                |  43 ++
+ templates/models/_inference_error.html        |   4 +
+ templates/models/_inference_loading.html      |   5 +
+ templates/models/_inference_result.html       |  69 +++
+ templates/models/_model_card.html             |  18 +
+ templates/models/_results_grid.html           |  14 +
+ templates/models/detail.html                  | 184 ++++++++
+ templates/models/list.html                    |  44 ++
+ templates/models/run_detail.html              |  27 ++
+ templates/models/upload.html                  | 227 ++++++++++
+ templates/models/upload_success.html          |  20 +
+ templates/registration/login.html             |  34 ++
+ templates/registration/register.html          |  66 +++
+ 34 files changed, 3103 insertions(+), 15 deletions(-)
+ create mode 100644 algorithms/forms.py
+ create mode 100644 algorithms/inference.py
+ create mode 100644 algorithms/management/commands/cleanup_old_runs.py
+ create mode 100644 algorithms/migrations/0002_benchmark_mlmodel_inferencerun_benchmarkentry_and_more.py
+ create mode 100644 algorithms/views_benchmark.py
+ create mode 100644 algorithms/views_models.py
+ create mode 100644 templates/benchmarks/_benchmark_card.html
+ create mode 100644 templates/benchmarks/_compare_selected.html
+ create mode 100644 templates/benchmarks/_comparison_table.html
+ create mode 100644 templates/benchmarks/create.html
+ create mode 100644 templates/benchmarks/detail.html
+ create mode 100644 templates/benchmarks/list.html
+ create mode 100644 templates/models/_inference_error.html
+ create mode 100644 templates/models/_inference_loading.html
+ create mode 100644 templates/models/_inference_result.html
+ create mode 100644 templates/models/_model_card.html
+ create mode 100644 templates/models/_results_grid.html
+ create mode 100644 templates/models/detail.html
+ create mode 100644 templates/models/list.html
+ create mode 100644 templates/models/run_detail.html
+ create mode 100644 templates/models/upload.html
+ create mode 100644 templates/models/upload_success.html
+ create mode 100644 templates/registration/login.html
+ create mode 100644 templates/registration/register.html
+
+diff --git a/algorithms/admin.py b/algorithms/admin.py
+index da831c5..fd33745 100644
+--- a/algorithms/admin.py
++++ b/algorithms/admin.py
+@@ -1,6 +1,15 @@
+ from django.contrib import admin
+ 
+-from .models import Algorithm, Category, Version
++from .models import (
++    Algorithm,
++    Benchmark,
++    BenchmarkEntry,
++    Category,
++    InferenceRun,
++    MLModel,
++    ResearcherProfile,
++    Version,
++)
+ 
+ 
+ class VersionInline(admin.TabularInline):
+@@ -37,3 +46,58 @@ class VersionAdmin(admin.ModelAdmin):
+     list_display = ("algorithm", "version", "line", "tag", "released_on")
+     list_filter = ("line", "tag")
+     search_fields = ("algorithm__name", "version")
++
++
++@admin.register(ResearcherProfile)
++class ResearcherProfileAdmin(admin.ModelAdmin):
++    list_display = ("user", "institution", "is_approved")
++    list_filter = ("is_approved",)
++    search_fields = ("user__username", "institution", "orcid")
++
++
++class BenchmarkEntryInline(admin.TabularInline):
++    model = BenchmarkEntry
++    extra = 0
++    fields = ("model_name", "model", "order", "is_highlighted")
++
++
++@admin.register(MLModel)
++class MLModelAdmin(admin.ModelAdmin):
++    list_display = ("name", "architecture", "modality", "body_region", "status", "researcher", "created_at")
++    list_filter = ("status", "modality", "body_region", "architecture")
++    search_fields = ("name", "slug", "clinical_task", "researcher__username")
++    prepopulated_fields = {"slug": ("name",)}
++    fieldsets = (
++        (None, {"fields": ("name", "slug", "researcher", "description", "status", "is_public")}),
++        ("Architecture", {"fields": ("architecture", "num_classes", "class_labels", "input_size", "input_channels", "custom_architecture_code")}),
++        ("Medical Context", {"fields": ("modality", "body_region", "clinical_task", "tags")}),
++        ("Model File", {"fields": ("model_file", "model_version")}),
++        ("Explainability", {"fields": ("gradcam_enabled", "gradcam_target_layer", "xai_script")}),
++        ("Preprocessing", {"fields": ("preprocessing_mean", "preprocessing_std", "preprocessing_notes")}),
++        ("Reported Performance", {"fields": ("reported_accuracy", "reported_auc", "reported_f1", "reported_dataset", "reported_dataset_size")}),
++        ("Example", {"fields": ("example_input", "example_expected_label")}),
++    )
++
++
++@admin.register(InferenceRun)
++class InferenceRunAdmin(admin.ModelAdmin):
++    list_display = ("id", "model", "user", "status", "result_label", "result_confidence", "created_at")
++    list_filter = ("status",)
++    search_fields = ("model__name", "result_label")
++    readonly_fields = ("created_at",)
++
++
++@admin.register(Benchmark)
++class BenchmarkAdmin(admin.ModelAdmin):
++    list_display = ("name", "clinical_task", "modality", "status", "researcher", "created_at")
++    list_filter = ("status", "modality")
++    search_fields = ("name", "clinical_task")
++    prepopulated_fields = {"slug": ("name",)}
++    inlines = [BenchmarkEntryInline]
++
++
++@admin.register(BenchmarkEntry)
++class BenchmarkEntryAdmin(admin.ModelAdmin):
++    list_display = ("model_name", "benchmark", "order", "is_highlighted")
++    list_filter = ("is_highlighted",)
++    search_fields = ("model_name", "benchmark__name")
+diff --git a/algorithms/forms.py b/algorithms/forms.py
+new file mode 100644
+index 0000000..e237e7e
+--- /dev/null
++++ b/algorithms/forms.py
+@@ -0,0 +1,182 @@
++import os
++
++from django import forms
++from django.contrib.auth.forms import UserCreationForm
++from django.contrib.auth.models import User
++from django.core.exceptions import ValidationError
++
++from .models import Benchmark, BenchmarkEntry, MLModel, ResearcherProfile
++
++
++class RegistrationForm(UserCreationForm):
++    institution = forms.CharField(max_length=200)
++    orcid = forms.CharField(max_length=40, required=False)
++    bio = forms.CharField(widget=forms.Textarea(attrs={"rows": 3}), required=False)
++
++    class Meta:
++        model = User
++        fields = ("username", "email", "password1", "password2")
++
++    def save(self, commit=True):
++        user = super().save(commit=commit)
++        if commit:
++            ResearcherProfile.objects.create(
++                user=user,
++                institution=self.cleaned_data["institution"],
++                orcid=self.cleaned_data.get("orcid", ""),
++                bio=self.cleaned_data.get("bio", ""),
++            )
++        return user
++
++
++MAX_MODEL_SIZE_BYTES = 500 * 1024 * 1024
++
++
++class MLModelForm(forms.ModelForm):
++    class Meta:
++        model = MLModel
++        fields = [
++            "name", "description", "clinical_task", "modality", "body_region", "tags",
++            "architecture", "num_classes", "class_labels", "input_size", "input_channels",
++            "custom_architecture_code",
++            "preprocessing_mean", "preprocessing_std", "preprocessing_notes",
++            "model_file", "model_version", "example_input", "example_expected_label",
++            "reported_accuracy", "reported_auc", "reported_f1",
++            "reported_dataset", "reported_dataset_size",
++            "gradcam_enabled", "gradcam_target_layer",
++        ]
++        widgets = {
++            "description": forms.Textarea(attrs={"rows": 4}),
++            "custom_architecture_code": forms.Textarea(attrs={"rows": 10, "class": "font-mono text-sm"}),
++            "preprocessing_notes": forms.Textarea(attrs={"rows": 3}),
++            "tags": forms.TextInput(attrs={"placeholder": "e.g. stroke, ct, brain (comma-separated)"}),
++            "class_labels": forms.TextInput(attrs={"placeholder": "e.g. Normal, Stroke (comma-separated)"}),
++            "preprocessing_mean": forms.TextInput(attrs={"placeholder": "0.485, 0.456, 0.406"}),
++            "preprocessing_std": forms.TextInput(attrs={"placeholder": "0.229, 0.224, 0.225"}),
++        }
++
++    def clean_model_file(self):
++        f = self.cleaned_data.get("model_file")
++        if f:
++            ext = os.path.splitext(f.name)[1].lower()
++            if ext not in (".pt", ".pth"):
++                raise ValidationError("Only .pt and .pth files are allowed.")
++            if f.size > MAX_MODEL_SIZE_BYTES:
++                raise ValidationError("Model file must be under 500 MB.")
++        return f
++
++    def clean_tags(self):
++        val = self.cleaned_data.get("tags")
++        if isinstance(val, str):
++            return [t.strip() for t in val.split(",") if t.strip()]
++        if isinstance(val, list):
++            return val
++        return []
++
++    def clean_class_labels(self):
++        val = self.cleaned_data.get("class_labels")
++        if isinstance(val, str):
++            return [t.strip() for t in val.split(",") if t.strip()]
++        if isinstance(val, list):
++            return val
++        return []
++
++    def clean_preprocessing_mean(self):
++        val = self.cleaned_data.get("preprocessing_mean")
++        if isinstance(val, str) and val.strip():
++            try:
++                return [float(x.strip()) for x in val.split(",")]
++            except ValueError:
++                raise ValidationError("Enter comma-separated numbers.")
++        if isinstance(val, list):
++            return val
++        return [0.485, 0.456, 0.406]
++
++    def clean_preprocessing_std(self):
++        val = self.cleaned_data.get("preprocessing_std")
++        if isinstance(val, str) and val.strip():
++            try:
++                return [float(x.strip()) for x in val.split(",")]
++            except ValueError:
++                raise ValidationError("Enter comma-separated numbers.")
++        if isinstance(val, list):
++            return val
++        return [0.229, 0.224, 0.225]
++
++    def clean(self):
++        cleaned = super().clean()
++        num_classes = cleaned.get("num_classes")
++        labels = cleaned.get("class_labels")
++        if num_classes and labels and len(labels) != num_classes:
++            self.add_error("class_labels", f"Expected {num_classes} labels, got {len(labels)}.")
++
++        arch = cleaned.get("architecture")
++        code = cleaned.get("custom_architecture_code", "")
++        if arch == "custom" and not code.strip():
++            self.add_error("custom_architecture_code", "Custom architecture requires code defining build_model().")
++        return cleaned
++
++
++class InferenceUploadForm(forms.Form):
++    image = forms.ImageField()
++
++
++class BenchmarkForm(forms.ModelForm):
++    class Meta:
++        model = Benchmark
++        fields = [
++            "name", "description", "clinical_task", "modality", "body_region",
++            "dataset_name", "dataset_description", "dataset_size",
++        ]
++        widgets = {
++            "description": forms.Textarea(attrs={"rows": 4}),
++            "dataset_description": forms.Textarea(attrs={"rows": 3}),
++        }
++
++
++class BenchmarkEntryForm(forms.ModelForm):
++    metrics_text = forms.CharField(
++        widget=forms.Textarea(attrs={"rows": 4, "placeholder": "accuracy: 0.92\nauc: 0.96\nf1: 0.91"}),
++        required=False,
++        help_text="One metric per line, format: name: value",
++    )
++
++    class Meta:
++        model = BenchmarkEntry
++        fields = ["model_name", "model", "pipeline_description", "order", "is_highlighted"]
++        widgets = {
++            "pipeline_description": forms.Textarea(attrs={"rows": 3}),
++        }
++
++    def __init__(self, *args, **kwargs):
++        super().__init__(*args, **kwargs)
++        self.fields["model"].required = False
++        self.fields["model"].queryset = MLModel.objects.filter(status=MLModel.Status.PUBLISHED)
++        if self.instance and self.instance.pk and self.instance.metrics:
++            lines = [f"{k}: {v}" for k, v in self.instance.metrics.items()]
++            self.fields["metrics_text"].initial = "\n".join(lines)
++
++    def clean_metrics_text(self):
++        text = self.cleaned_data.get("metrics_text", "")
++        if not text.strip():
++            return {}
++        metrics = {}
++        for line in text.strip().split("\n"):
++            line = line.strip()
++            if not line:
++                continue
++            if ":" not in line:
++                raise ValidationError(f"Invalid line: '{line}'. Use format 'name: value'.")
++            key, val = line.split(":", 1)
++            try:
++                metrics[key.strip()] = float(val.strip())
++            except ValueError:
++                raise ValidationError(f"Value for '{key.strip()}' must be a number.")
++        return metrics
++
++    def save(self, commit=True):
++        instance = super().save(commit=False)
++        instance.metrics = self.cleaned_data.get("metrics_text", {})
++        if commit:
++            instance.save()
++        return instance
+diff --git a/algorithms/inference.py b/algorithms/inference.py
+new file mode 100644
+index 0000000..5b60c84
+--- /dev/null
++++ b/algorithms/inference.py
+@@ -0,0 +1,286 @@
++import io
++import time
++from collections import OrderedDict
++from pathlib import Path
++
++import numpy as np
++import torch
++import torch.nn as nn
++import torchvision.models as tv_models
++import torchvision.transforms as transforms
++from django.conf import settings
++from PIL import Image
++
++MODEL_CACHE_SIZE = getattr(settings, "MODEL_CACHE_SIZE", 5)
++
++_model_cache = OrderedDict()
++
++
++def _get_torchvision_constructor(arch):
++    CONSTRUCTORS = {
++        "resnet18": tv_models.resnet18,
++        "resnet34": tv_models.resnet34,
++        "resnet50": tv_models.resnet50,
++        "resnet101": tv_models.resnet101,
++        "resnet152": tv_models.resnet152,
++        "efficientnet_b0": tv_models.efficientnet_b0,
++        "efficientnet_b1": tv_models.efficientnet_b1,
++        "efficientnet_b2": tv_models.efficientnet_b2,
++        "efficientnet_b3": tv_models.efficientnet_b3,
++        "efficientnet_b4": tv_models.efficientnet_b4,
++        "efficientnet_b5": tv_models.efficientnet_b5,
++        "efficientnet_b6": tv_models.efficientnet_b6,
++        "efficientnet_b7": tv_models.efficientnet_b7,
++        "vgg16": tv_models.vgg16,
++        "vgg19": tv_models.vgg19,
++        "densenet121": tv_models.densenet121,
++        "densenet169": tv_models.densenet169,
++        "densenet201": tv_models.densenet201,
++        "mobilenet_v2": tv_models.mobilenet_v2,
++        "mobilenet_v3_small": tv_models.mobilenet_v3_small,
++        "mobilenet_v3_large": tv_models.mobilenet_v3_large,
++        "inception_v3": tv_models.inception_v3,
++        "vit_b_16": tv_models.vit_b_16,
++        "vit_b_32": tv_models.vit_b_32,
++        "vit_l_16": tv_models.vit_l_16,
++        "vit_l_32": tv_models.vit_l_32,
++        "swin_t": tv_models.swin_t,
++        "swin_s": tv_models.swin_s,
++        "swin_b": tv_models.swin_b,
++    }
++    return CONSTRUCTORS.get(arch)
++
++
++def _adjust_classifier(model, arch, num_classes):
++    if arch.startswith("resnet") or arch == "inception_v3":
++        model.fc = nn.Linear(model.fc.in_features, num_classes)
++    elif arch.startswith("efficientnet"):
++        model.classifier[1] = nn.Linear(model.classifier[1].in_features, num_classes)
++    elif arch.startswith("vgg"):
++        model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, num_classes)
++    elif arch.startswith("densenet"):
++        model.classifier = nn.Linear(model.classifier.in_features, num_classes)
++    elif arch.startswith("mobilenet"):
++        model.classifier[-1] = nn.Linear(model.classifier[-1].in_features, num_classes)
++    elif arch.startswith("vit"):
++        model.heads.head = nn.Linear(model.heads.head.in_features, num_classes)
++    elif arch.startswith("swin"):
++        model.head = nn.Linear(model.head.in_features, num_classes)
++    return model
++
++
++def load_model(ml_model):
++    cache_key = (ml_model.id, ml_model.model_version)
++    if cache_key in _model_cache:
++        _model_cache.move_to_end(cache_key)
++        return _model_cache[cache_key]
++
++    arch = ml_model.architecture
++    num_classes = ml_model.num_classes
++    model_path = ml_model.model_file.path
++
++    if arch == "custom":
++        safe_builtins = {
++            k: v for k, v in __builtins__.items() if k in (
++                "range", "len", "int", "float", "bool", "str", "list", "dict",
++                "tuple", "set", "enumerate", "zip", "map", "filter", "sorted",
++                "min", "max", "sum", "abs", "round", "isinstance", "issubclass",
++                "hasattr", "getattr", "setattr", "type", "super", "property",
++                "staticmethod", "classmethod", "True", "False", "None",
++                "print", "ValueError", "TypeError", "RuntimeError",
++            )
++        } if isinstance(__builtins__, dict) else {}
++        namespace = {"torch": torch, "nn": nn, "__builtins__": safe_builtins}
++        exec(ml_model.custom_architecture_code, namespace)
++        if "build_model" not in namespace:
++            raise ValueError("Custom architecture code must define build_model(num_classes)")
++        model = namespace["build_model"](num_classes)
++    else:
++        constructor = _get_torchvision_constructor(arch)
++        if constructor is None:
++            raise ValueError(f"Unknown architecture: {arch}")
++        model = constructor(weights=None)
++        model = _adjust_classifier(model, arch, num_classes)
++
++    try:
++        state_dict = torch.load(model_path, map_location="cpu", weights_only=True)
++        model.load_state_dict(state_dict)
++    except Exception:
++        model = torch.load(model_path, map_location="cpu", weights_only=False)
++
++    model.eval()
++
++    if len(_model_cache) >= MODEL_CACHE_SIZE:
++        _model_cache.popitem(last=False)
++    _model_cache[cache_key] = model
++    return model
++
++
++def preprocess_image(image_path, ml_model):
++    path = Path(image_path)
++    suffix = path.suffix.lower()
++
++    if suffix == ".dcm":
++        import pydicom
++        ds = pydicom.dcmread(str(path))
++        arr = ds.pixel_array.astype(np.float32)
++        if arr.ndim == 2:
++            arr = (arr - arr.min()) / (arr.max() - arr.min() + 1e-8) * 255
++            img = Image.fromarray(arr.astype(np.uint8), mode="L")
++        else:
++            img = Image.fromarray(arr.astype(np.uint8))
++    elif suffix in (".nii", ".gz"):
++        import nibabel as nib
++        nii = nib.load(str(path))
++        data = np.array(nii.dataobj, dtype=np.float32)
++        if data.ndim == 3:
++            mid = data.shape[2] // 2
++            sl = data[:, :, mid]
++        else:
++            sl = data
++        sl = (sl - sl.min()) / (sl.max() - sl.min() + 1e-8) * 255
++        img = Image.fromarray(sl.astype(np.uint8), mode="L")
++    else:
++        img = Image.open(image_path)
++
++    channels = ml_model.input_channels
++    if channels == 3:
++        img = img.convert("RGB")
++    elif channels == 1:
++        img = img.convert("L")
++
++    size = ml_model.input_size
++    mean = ml_model.preprocessing_mean or [0.485, 0.456, 0.406]
++    std = ml_model.preprocessing_std or [0.229, 0.224, 0.225]
++
++    if channels == 1:
++        mean = [mean[0]] if len(mean) > 1 else mean
++        std = [std[0]] if len(std) > 1 else std
++
++    transform = transforms.Compose([
++        transforms.Resize((size, size)),
++        transforms.ToTensor(),
++        transforms.Normalize(mean=mean, std=std),
++    ])
++    tensor = transform(img)
++    return tensor.unsqueeze(0)
++
++
++def run_inference(ml_model, image_path):
++    start = time.time()
++    model = load_model(ml_model)
++    input_tensor = preprocess_image(image_path, ml_model)
++
++    with torch.no_grad():
++        output = model(input_tensor)
++        if isinstance(output, tuple):
++            output = output[0]
++
++    probs = torch.softmax(output, dim=1).squeeze()
++    confidence, predicted_idx = torch.max(probs, dim=0)
++    predicted_idx = predicted_idx.item()
++    confidence = confidence.item()
++
++    labels = ml_model.class_labels
++    elapsed_ms = int((time.time() - start) * 1000)
++
++    probabilities = {}
++    for i, label in enumerate(labels):
++        probabilities[label] = round(probs[i].item(), 4)
++
++    return {
++        "predicted_class_index": predicted_idx,
++        "predicted_label": labels[predicted_idx] if predicted_idx < len(labels) else f"Class {predicted_idx}",
++        "confidence": round(confidence, 4),
++        "probabilities": probabilities,
++        "inference_time_ms": elapsed_ms,
++    }
++
++
++def _find_last_conv_layer(model):
++    last_conv = None
++    last_name = None
++    for name, module in model.named_modules():
++        if isinstance(module, (nn.Conv2d, nn.Conv1d)):
++            last_conv = module
++            last_name = name
++    return last_conv, last_name
++
++
++def _get_target_layer(model, ml_model):
++    if ml_model.gradcam_target_layer:
++        parts = ml_model.gradcam_target_layer.split(".")
++        layer = model
++        for p in parts:
++            if p.isdigit():
++                layer = layer[int(p)]
++            else:
++                layer = getattr(layer, p)
++        return layer
++    layer, _ = _find_last_conv_layer(model)
++    return layer
++
++
++def generate_gradcam(ml_model, image_path, predicted_class_index):
++    if ml_model.architecture == "custom" and not ml_model.xai_script:
++        return None
++
++    model = load_model(ml_model)
++    input_tensor = preprocess_image(image_path, ml_model)
++
++    target_layer = _get_target_layer(model, ml_model)
++    if target_layer is None:
++        return None
++
++    activations = []
++    gradients = []
++
++    def fwd_hook(module, inp, out):
++        activations.append(out.detach())
++
++    def bwd_hook(module, grad_in, grad_out):
++        gradients.append(grad_out[0].detach())
++
++    fwd_handle = target_layer.register_forward_hook(fwd_hook)
++    bwd_handle = target_layer.register_full_backward_hook(bwd_hook)
++
++    try:
++        model.zero_grad()
++        output = model(input_tensor)
++        if isinstance(output, tuple):
++            output = output[0]
++        score = output[0, predicted_class_index]
++        score.backward()
++
++        act = activations[0].squeeze()
++        grad = gradients[0].squeeze()
++
++        weights = grad.mean(dim=(1, 2)) if grad.ndim == 3 else grad.mean(dim=-1)
++        cam = torch.zeros(act.shape[1:], dtype=act.dtype)
++        for i, w in enumerate(weights):
++            cam += w * act[i]
++        cam = torch.relu(cam)
++        cam = cam - cam.min()
++        if cam.max() > 0:
++            cam = cam / cam.max()
++
++        cam_np = cam.cpu().numpy()
++        cam_resized = np.array(
++            Image.fromarray((cam_np * 255).astype(np.uint8)).resize(
++                (ml_model.input_size, ml_model.input_size), Image.BILINEAR
++            )
++        )
++
++        import matplotlib.cm as cm
++        heatmap = cm.jet(cam_resized / 255.0)[:, :, :3]
++        heatmap = (heatmap * 255).astype(np.uint8)
++
++        orig = Image.open(image_path).convert("RGB").resize(
++            (ml_model.input_size, ml_model.input_size)
++        )
++        orig_np = np.array(orig)
++        overlay = (0.5 * orig_np + 0.5 * heatmap).astype(np.uint8)
++        return Image.fromarray(overlay)
++    finally:
++        fwd_handle.remove()
++        bwd_handle.remove()
+diff --git a/algorithms/management/commands/cleanup_old_runs.py b/algorithms/management/commands/cleanup_old_runs.py
+new file mode 100644
+index 0000000..4a43cd8
+--- /dev/null
++++ b/algorithms/management/commands/cleanup_old_runs.py
+@@ -0,0 +1,35 @@
++"""
++Delete uploaded inference run files older than 24 hours (keeps metadata).
++
++    python manage.py cleanup_old_runs
++"""
++
++from django.core.management.base import BaseCommand
++from django.utils import timezone
++
++from algorithms.models import InferenceRun
++
++
++class Command(BaseCommand):
++    help = "Delete inference run input/output files older than 24 hours."
++
++    def handle(self, *args, **options):
++        cutoff = timezone.now() - timezone.timedelta(hours=24)
++        old_runs = InferenceRun.objects.filter(created_at__lt=cutoff)
++        count = 0
++        for run in old_runs:
++            if run.input_image:
++                try:
++                    run.input_image.delete(save=False)
++                except Exception:
++                    pass
++            if run.gradcam_image:
++                try:
++                    run.gradcam_image.delete(save=False)
++                except Exception:
++                    pass
++            run.input_image = ""
++            run.gradcam_image = ""
++            run.save(update_fields=["input_image", "gradcam_image"])
++            count += 1
++        self.stdout.write(self.style.SUCCESS(f"Cleaned up {count} old runs."))
+diff --git a/algorithms/management/commands/seed.py b/algorithms/management/commands/seed.py
+index 8595e94..7833712 100644
+--- a/algorithms/management/commands/seed.py
++++ b/algorithms/management/commands/seed.py
+@@ -1,6 +1,5 @@
+ """
+-Seed the registry with categories and a few representative algorithms
+-transcribed from the MedAlgo Hub prototype dataset.
++Seed the registry with categories, algorithms, ML models, and benchmarks.
+ 
+     python manage.py seed
+ 
+@@ -8,10 +7,20 @@ Idempotent: re-running updates existing rows by slug/kind.
+ """
+ 
+ import datetime as dt
++import os
+ 
++from django.contrib.auth.models import User
+ from django.core.management.base import BaseCommand
+ 
+-from algorithms.models import Algorithm, Category, Version
++from algorithms.models import (
++    Algorithm,
++    Benchmark,
++    BenchmarkEntry,
++    Category,
++    MLModel,
++    ResearcherProfile,
++    Version,
++)
+ 
+ CATEGORIES = [
+     ("engine", "Engines", "Segmentation backbones. Swap nnU-Net for an alternative pipeline.", 0),
+@@ -27,8 +36,6 @@ CATEGORIES = [
+     ("report", "Reports", "Generated documents and structured reports.", 10),
+ ]
+ 
+-# A representative slice of the prototype's EXT catalogue across categories,
+-# fields and capability classes.
+ ALGORITHMS = [
+     {
+         "slug": "nnunet-core", "name": "nnU-Net", "kind": "engine", "field": "medical",
+@@ -107,9 +114,116 @@ ALGORITHMS = [
+     },
+ ]
+ 
++ML_MODELS = [
++    {
++        "slug": "brain-ct-stroke-classifier",
++        "name": "Brain CT Stroke Classifier",
++        "architecture": "resnet18",
++        "num_classes": 2,
++        "class_labels": ["Normal", "Stroke"],
++        "input_size": 224,
++        "input_channels": 3,
++        "modality": "ct",
++        "body_region": "head",
++        "clinical_task": "Ischemic stroke detection from brain CT scans",
++        "tags": ["stroke", "ct", "brain", "classification"],
++        "description": "A ResNet-18 model fine-tuned for binary classification of brain CT images to detect ischemic stroke. Trained on a curated dataset of clinical brain CT scans.",
++        "reported_accuracy": 89.0,
++        "reported_auc": 0.93,
++        "reported_f1": 0.87,
++        "reported_dataset": "CQ500",
++        "reported_dataset_size": 491,
++        "model_version": "1.0.0",
++    },
++    {
++        "slug": "chest-xray-pneumonia-detector",
++        "name": "Chest X-Ray Pneumonia Detector",
++        "architecture": "densenet121",
++        "num_classes": 2,
++        "class_labels": ["Normal", "Pneumonia"],
++        "input_size": 224,
++        "input_channels": 3,
++        "modality": "xray",
++        "body_region": "chest",
++        "clinical_task": "Pneumonia classification from chest X-rays",
++        "tags": ["pneumonia", "xray", "chest", "classification"],
++        "description": "A DenseNet-121 model for detecting pneumonia in chest X-ray images. Pre-trained on ImageNet and fine-tuned on chest X-ray datasets.",
++        "reported_accuracy": 92.0,
++        "reported_auc": 0.96,
++        "reported_f1": 0.91,
++        "reported_dataset": "RSNA Pneumonia Detection",
++        "reported_dataset_size": 26684,
++        "model_version": "1.0.0",
++    },
++    {
++        "slug": "skin-lesion-classifier",
++        "name": "Skin Lesion Classifier",
++        "architecture": "efficientnet_b0",
++        "num_classes": 7,
++        "class_labels": ["MEL", "NV", "BCC", "AK", "BKL", "DF", "VASC"],
++        "input_size": 224,
++        "input_channels": 3,
++        "modality": "dermoscopy",
++        "body_region": "skin",
++        "clinical_task": "Multi-class skin lesion classification",
++        "tags": ["dermatology", "skin", "lesion", "melanoma", "classification"],
++        "description": "An EfficientNet-B0 model for classifying dermoscopic images into 7 categories of skin lesions (ISIC classes). Useful for screening and triage.",
++        "reported_accuracy": 85.0,
++        "reported_auc": 0.94,
++        "reported_f1": 0.83,
++        "reported_dataset": "ISIC 2018",
++        "reported_dataset_size": 10015,
++        "model_version": "1.0.0",
++    },
++]
++
++BENCHMARKS = [
++    {
++        "slug": "brain-ct-stroke-classification-benchmark",
++        "name": "Brain CT Stroke Classification Benchmark",
++        "clinical_task": "Stroke Classification from CT",
++        "modality": "ct",
++        "body_region": "head",
++        "dataset_name": "CQ500",
++        "dataset_description": "A curated dataset of 491 brain CT scans from Centre for Advanced Research in Imaging, Neurosciences and Genomics (CARING), New Delhi.",
++        "dataset_size": 491,
++        "description": "Comparison of deep learning architectures for binary stroke classification on brain CT scans. All models were pre-trained on ImageNet and fine-tuned on the CQ500 dataset.",
++        "entries": [
++            {"model_name": "ResNet-18 (ImageNet pretrain)", "order": 0, "pipeline_description": "Pretrained on ImageNet, fine-tuned for 50 epochs with AdamW lr=1e-4, augmentations: random flip + rotation", "metrics": {"accuracy": 0.89, "auc": 0.93, "f1": 0.87, "sensitivity": 0.85, "specificity": 0.93, "inference_time_ms": 12}, "link_slug": "brain-ct-stroke-classifier"},
++            {"model_name": "ResNet-50 (ImageNet pretrain)", "order": 1, "pipeline_description": "Pretrained on ImageNet, fine-tuned for 30 epochs with AdamW lr=5e-5", "metrics": {"accuracy": 0.92, "auc": 0.96, "f1": 0.91, "sensitivity": 0.90, "specificity": 0.94, "inference_time_ms": 25}},
++            {"model_name": "EfficientNet-B0 (ImageNet pretrain)", "order": 2, "pipeline_description": "Pretrained on ImageNet, fine-tuned for 40 epochs with AdamW lr=1e-4", "metrics": {"accuracy": 0.91, "auc": 0.95, "f1": 0.90, "sensitivity": 0.88, "specificity": 0.94, "inference_time_ms": 18}},
++            {"model_name": "DenseNet-121 (CheXpert pretrain)", "order": 3, "pipeline_description": "Pretrained on CheXpert chest X-rays, then fine-tuned on brain CTs for 60 epochs", "metrics": {"accuracy": 0.93, "auc": 0.97, "f1": 0.92, "sensitivity": 0.91, "specificity": 0.95, "inference_time_ms": 30}, "is_highlighted": True},
++        ],
++    },
++    {
++        "slug": "chest-xray-pneumonia-benchmark",
++        "name": "Chest X-Ray Pneumonia Detection Benchmark",
++        "clinical_task": "Pneumonia Detection from Chest X-Ray",
++        "modality": "xray",
++        "body_region": "chest",
++        "dataset_name": "RSNA Pneumonia Detection Challenge",
++        "dataset_description": "Chest X-ray images from the RSNA Pneumonia Detection Challenge on Kaggle.",
++        "dataset_size": 26684,
++        "description": "Comparison of architectures for pneumonia detection on chest X-rays from the RSNA challenge dataset.",
++        "entries": [
++            {"model_name": "DenseNet-121 (ImageNet)", "order": 0, "pipeline_description": "ImageNet pretrained, fine-tuned 30 epochs", "metrics": {"accuracy": 0.92, "auc": 0.96, "f1": 0.91, "inference_time_ms": 28}, "link_slug": "chest-xray-pneumonia-detector"},
++            {"model_name": "ResNet-50 (ImageNet)", "order": 1, "pipeline_description": "ImageNet pretrained, fine-tuned 40 epochs", "metrics": {"accuracy": 0.90, "auc": 0.94, "f1": 0.89, "inference_time_ms": 22}},
++            {"model_name": "EfficientNet-B2 (ImageNet)", "order": 2, "pipeline_description": "ImageNet pretrained, fine-tuned 35 epochs with mixup augmentation", "metrics": {"accuracy": 0.93, "auc": 0.97, "f1": 0.92, "inference_time_ms": 20}, "is_highlighted": True},
++        ],
++    },
++]
++
++
++def _create_demo_image(path, size=224):
++    """Create a small demo image for the seed model."""
++    from PIL import Image
++    img = Image.new("RGB", (size, size), color=(128, 128, 128))
++    os.makedirs(os.path.dirname(path), exist_ok=True)
++    img.save(path)
++
+ 
+ class Command(BaseCommand):
+-    help = "Seed categories and representative algorithms from the prototype dataset."
++    help = "Seed categories, algorithms, ML models, and benchmarks."
+ 
+     def handle(self, *args, **options):
+         cats = {}
+@@ -146,4 +260,119 @@ class Command(BaseCommand):
+                     },
+                 )
+         self.stdout.write(self.style.SUCCESS(f"Algorithms: {len(ALGORITHMS)}"))
++
++        researcher, created = User.objects.get_or_create(
++            username="demo_researcher",
++            defaults={"email": "researcher@medalgo.dev", "is_staff": False},
++        )
++        if created:
++            researcher.set_password("demo1234")
++            researcher.save()
++        profile, _ = ResearcherProfile.objects.update_or_create(
++            user=researcher,
++            defaults={"institution": "MedAlgo Research Lab", "is_approved": True, "bio": "Demo researcher account for seed data."},
++        )
++        self.stdout.write(self.style.SUCCESS(f"Researcher: {researcher.username}"))
++
++        from django.conf import settings as django_settings
++        media_root = str(django_settings.MEDIA_ROOT)
++
++        ml_model_map = {}
++        for spec in ML_MODELS:
++            import torch
++            import torchvision.models as tv_models
++
++            arch = spec["architecture"]
++            num_classes = spec["num_classes"]
++            slug = spec["slug"]
++
++            pt_dir = os.path.join(media_root, "models", "pt_files")
++            os.makedirs(pt_dir, exist_ok=True)
++            pt_filename = f"{slug}.pt"
++            pt_path = os.path.join(pt_dir, pt_filename)
++
++            if not os.path.exists(pt_path):
++                if arch == "resnet18":
++                    model = tv_models.resnet18(weights=None)
++                    model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
++                elif arch == "densenet121":
++                    model = tv_models.densenet121(weights=None)
++                    model.classifier = torch.nn.Linear(model.classifier.in_features, num_classes)
++                elif arch == "efficientnet_b0":
++                    model = tv_models.efficientnet_b0(weights=None)
++                    model.classifier[1] = torch.nn.Linear(model.classifier[1].in_features, num_classes)
++                else:
++                    continue
++                torch.save(model.state_dict(), pt_path)
++                self.stdout.write(f"  Created {pt_filename}")
++
++            example_dir = os.path.join(media_root, "models", "examples")
++            example_path = os.path.join(example_dir, f"{slug}_demo.png")
++            if not os.path.exists(example_path):
++                _create_demo_image(example_path)
++
++            ml_obj, _ = MLModel.objects.update_or_create(
++                slug=slug,
++                defaults={
++                    "name": spec["name"],
++                    "researcher": researcher,
++                    "description": spec["description"],
++                    "architecture": arch,
++                    "num_classes": num_classes,
++                    "class_labels": spec["class_labels"],
++                    "input_size": spec["input_size"],
++                    "input_channels": spec["input_channels"],
++                    "modality": spec["modality"],
++                    "body_region": spec["body_region"],
++                    "clinical_task": spec["clinical_task"],
++                    "tags": spec["tags"],
++                    "model_file": f"models/pt_files/{pt_filename}",
++                    "model_version": spec["model_version"],
++                    "example_input": f"models/examples/{slug}_demo.png",
++                    "example_expected_label": spec["class_labels"][0],
++                    "reported_accuracy": spec.get("reported_accuracy"),
++                    "reported_auc": spec.get("reported_auc"),
++                    "reported_f1": spec.get("reported_f1"),
++                    "reported_dataset": spec.get("reported_dataset", ""),
++                    "reported_dataset_size": spec.get("reported_dataset_size"),
++                    "status": MLModel.Status.PUBLISHED,
++                    "gradcam_enabled": True,
++                    "preprocessing_mean": [0.485, 0.456, 0.406],
++                    "preprocessing_std": [0.229, 0.224, 0.225],
++                },
++            )
++            ml_model_map[slug] = ml_obj
++        self.stdout.write(self.style.SUCCESS(f"ML Models: {len(ML_MODELS)}"))
++
++        for bspec in BENCHMARKS:
++            entries = bspec.pop("entries")
++            benchmark, _ = Benchmark.objects.update_or_create(
++                slug=bspec["slug"],
++                defaults={
++                    "name": bspec["name"],
++                    "researcher": researcher,
++                    "clinical_task": bspec["clinical_task"],
++                    "modality": bspec["modality"],
++                    "body_region": bspec["body_region"],
++                    "dataset_name": bspec["dataset_name"],
++                    "dataset_description": bspec["dataset_description"],
++                    "dataset_size": bspec["dataset_size"],
++                    "description": bspec["description"],
++                    "status": Benchmark.Status.PUBLISHED,
++                },
++            )
++            for entry_spec in entries:
++                linked_model = ml_model_map.get(entry_spec.get("link_slug"))
++                BenchmarkEntry.objects.update_or_create(
++                    benchmark=benchmark,
++                    model_name=entry_spec["model_name"],
++                    defaults={
++                        "model": linked_model,
++                        "order": entry_spec["order"],
++                        "pipeline_description": entry_spec.get("pipeline_description", ""),
++                        "metrics": entry_spec.get("metrics", {}),
++                        "is_highlighted": entry_spec.get("is_highlighted", False),
++                    },
++                )
++        self.stdout.write(self.style.SUCCESS(f"Benchmarks: {len(BENCHMARKS)}"))
+         self.stdout.write(self.style.SUCCESS("Seed complete."))
+diff --git a/algorithms/migrations/0002_benchmark_mlmodel_inferencerun_benchmarkentry_and_more.py b/algorithms/migrations/0002_benchmark_mlmodel_inferencerun_benchmarkentry_and_more.py
+new file mode 100644
+index 0000000..3a57b23
+--- /dev/null
++++ b/algorithms/migrations/0002_benchmark_mlmodel_inferencerun_benchmarkentry_and_more.py
+@@ -0,0 +1,398 @@
++# Generated by Django 5.1.15 on 2026-07-14 11:56
++
++import django.db.models.deletion
++from django.conf import settings
++from django.db import migrations, models
++
++
++class Migration(migrations.Migration):
++
++    dependencies = [
++        ("algorithms", "0001_initial"),
++        migrations.swappable_dependency(settings.AUTH_USER_MODEL),
++    ]
++
++    operations = [
++        migrations.CreateModel(
++            name="Benchmark",
++            fields=[
++                (
++                    "id",
++                    models.BigAutoField(
++                        auto_created=True,
++                        primary_key=True,
++                        serialize=False,
++                        verbose_name="ID",
++                    ),
++                ),
++                ("slug", models.SlugField(max_length=120, unique=True)),
++                ("name", models.CharField(max_length=200)),
++                ("description", models.TextField(blank=True)),
++                ("clinical_task", models.CharField(max_length=200)),
++                (
++                    "modality",
++                    models.CharField(
++                        choices=[
++                            ("ct", "CT"),
++                            ("mri", "MRI"),
++                            ("xray", "X-Ray"),
++                            ("ultrasound", "Ultrasound"),
++                            ("endoscopy", "Endoscopy"),
++                            ("dermoscopy", "Dermoscopy"),
++                            ("fundoscopy", "Fundoscopy"),
++                            ("histopathology", "Histopathology"),
++                            ("pet", "PET"),
++                            ("other", "Other"),
++                        ],
++                        max_length=24,
++                    ),
++                ),
++                (
++                    "body_region",
++                    models.CharField(
++                        choices=[
++                            ("head", "Head"),
++                            ("chest", "Chest"),
++                            ("abdomen", "Abdomen"),
++                            ("pelvis", "Pelvis"),
++                            ("spine", "Spine"),
++                            ("upper_extremity", "Upper Extremity"),
++                            ("lower_extremity", "Lower Extremity"),
++                            ("skin", "Skin"),
++                            ("eye", "Eye"),
++                            ("whole_body", "Whole Body"),
++                            ("other", "Other"),
++                        ],
++                        max_length=24,
++                    ),
++                ),
++                ("dataset_name", models.CharField(max_length=200)),
++                ("dataset_description", models.TextField(blank=True)),
++                ("dataset_size", models.PositiveIntegerField(blank=True, null=True)),
++                (
++                    "status",
++                    models.CharField(
++                        choices=[
++                            ("draft", "Draft"),
++                            ("in_review", "In Review"),
++                            ("published", "Published"),
++                            ("rejected", "Rejected"),
++                        ],
++                        default="draft",
++                        max_length=16,
++                    ),
++                ),
++                ("created_at", models.DateTimeField(auto_now_add=True)),
++                ("updated_at", models.DateTimeField(auto_now=True)),
++                (
++                    "researcher",
++                    models.ForeignKey(
++                        on_delete=django.db.models.deletion.CASCADE,
++                        related_name="benchmarks",
++                        to=settings.AUTH_USER_MODEL,
++                    ),
++                ),
++            ],
++            options={
++                "ordering": ["-created_at"],
++            },
++        ),
++        migrations.CreateModel(
++            name="MLModel",
++            fields=[
++                (
++                    "id",
++                    models.BigAutoField(
++                        auto_created=True,
++                        primary_key=True,
++                        serialize=False,
++                        verbose_name="ID",
++                    ),
++                ),
++                ("slug", models.SlugField(max_length=120, unique=True)),
++                ("name", models.CharField(max_length=200)),
++                ("description", models.TextField(blank=True)),
++                ("created_at", models.DateTimeField(auto_now_add=True)),
++                ("updated_at", models.DateTimeField(auto_now=True)),
++                (
++                    "architecture",
++                    models.CharField(
++                        choices=[
++                            ("resnet18", "ResNet-18"),
++                            ("resnet34", "ResNet-34"),
++                            ("resnet50", "ResNet-50"),
++                            ("resnet101", "ResNet-101"),
++                            ("resnet152", "ResNet-152"),
++                            ("efficientnet_b0", "EfficientNet-B0"),
++                            ("efficientnet_b1", "EfficientNet-B1"),
++                            ("efficientnet_b2", "EfficientNet-B2"),
++                            ("efficientnet_b3", "EfficientNet-B3"),
++                            ("efficientnet_b4", "EfficientNet-B4"),
++                            ("efficientnet_b5", "EfficientNet-B5"),
++                            ("efficientnet_b6", "EfficientNet-B6"),
++                            ("efficientnet_b7", "EfficientNet-B7"),
++                            ("vgg16", "VGG-16"),
++                            ("vgg19", "VGG-19"),
++                            ("densenet121", "DenseNet-121"),
++                            ("densenet169", "DenseNet-169"),
++                            ("densenet201", "DenseNet-201"),
++                            ("mobilenet_v2", "MobileNet V2"),
++                            ("mobilenet_v3_small", "MobileNet V3 Small"),
++                            ("mobilenet_v3_large", "MobileNet V3 Large"),
++                            ("inception_v3", "Inception V3"),
++                            ("vit_b_16", "ViT-B/16"),
++                            ("vit_b_32", "ViT-B/32"),
++                            ("vit_l_16", "ViT-L/16"),
++                            ("vit_l_32", "ViT-L/32"),
++                            ("swin_t", "Swin-T"),
++                            ("swin_s", "Swin-S"),
++                            ("swin_b", "Swin-B"),
++                            ("custom", "Custom"),
++                        ],
++                        max_length=32,
++                    ),
++                ),
++                ("num_classes", models.PositiveIntegerField()),
++                (
++                    "class_labels",
++                    models.JSONField(
++                        help_text='List of class label strings, e.g. ["Normal", "Stroke"]'
++                    ),
++                ),
++                ("input_size", models.PositiveIntegerField(default=224)),
++                ("input_channels", models.PositiveIntegerField(default=3)),
++                (
++                    "modality",
++                    models.CharField(
++                        choices=[
++                            ("ct", "CT"),
++                            ("mri", "MRI"),
++                            ("xray", "X-Ray"),
++                            ("ultrasound", "Ultrasound"),
++                            ("endoscopy", "Endoscopy"),
++                            ("dermoscopy", "Dermoscopy"),
++                            ("fundoscopy", "Fundoscopy"),
++                            ("histopathology", "Histopathology"),
++                            ("pet", "PET"),
++                            ("other", "Other"),
++                        ],
++                        max_length=24,
++                    ),
++                ),
++                (
++                    "body_region",
++                    models.CharField(
++                        choices=[
++                            ("head", "Head"),
++                            ("chest", "Chest"),
++                            ("abdomen", "Abdomen"),
++                            ("pelvis", "Pelvis"),
++                            ("spine", "Spine"),
++                            ("upper_extremity", "Upper Extremity"),
++                            ("lower_extremity", "Lower Extremity"),
++                            ("skin", "Skin"),
++                            ("eye", "Eye"),
++                            ("whole_body", "Whole Body"),
++                            ("other", "Other"),
++                        ],
++                        max_length=24,
++                    ),
++                ),
++                ("clinical_task", models.CharField(max_length=200)),
++                ("tags", models.JSONField(blank=True, default=list)),
++                ("model_file", models.FileField(upload_to="models/pt_files/")),
++                ("model_version", models.CharField(default="1.0.0", max_length=32)),
++                ("custom_architecture_code", models.TextField(blank=True)),
++                ("gradcam_enabled", models.BooleanField(default=True)),
++                ("gradcam_target_layer", models.CharField(blank=True, max_length=120)),
++                ("xai_script", models.TextField(blank=True)),
++                ("preprocessing_mean", models.JSONField(blank=True, default=list)),
++                ("preprocessing_std", models.JSONField(blank=True, default=list)),
++                ("preprocessing_notes", models.TextField(blank=True)),
++                ("reported_accuracy", models.FloatField(blank=True, null=True)),
++                ("reported_auc", models.FloatField(blank=True, null=True)),
++                ("reported_f1", models.FloatField(blank=True, null=True)),
++                ("reported_dataset", models.CharField(blank=True, max_length=200)),
++                (
++                    "reported_dataset_size",
++                    models.PositiveIntegerField(blank=True, null=True),
++                ),
++                (
++                    "status",
++                    models.CharField(
++                        choices=[
++                            ("draft", "Draft"),
++                            ("in_review", "In Review"),
++                            ("published", "Published"),
++                            ("rejected", "Rejected"),
++                        ],
++                        default="draft",
++                        max_length=16,
++                    ),
++                ),
++                ("is_public", models.BooleanField(default=True)),
++                (
++                    "example_input",
++                    models.ImageField(blank=True, upload_to="models/examples/"),
++                ),
++                (
++                    "example_expected_label",
++                    models.CharField(blank=True, max_length=120),
++                ),
++                (
++                    "researcher",
++                    models.ForeignKey(
++                        on_delete=django.db.models.deletion.CASCADE,
++                        related_name="ml_models",
++                        to=settings.AUTH_USER_MODEL,
++                    ),
++                ),
++            ],
++            options={
++                "ordering": ["-created_at"],
++            },
++        ),
++        migrations.CreateModel(
++            name="InferenceRun",
++            fields=[
++                (
++                    "id",
++                    models.BigAutoField(
++                        auto_created=True,
++                        primary_key=True,
++                        serialize=False,
++                        verbose_name="ID",
++                    ),
++                ),
++                ("input_image", models.ImageField(upload_to="runs/inputs/")),
++                ("created_at", models.DateTimeField(auto_now_add=True)),
++                (
++                    "status",
++                    models.CharField(
++                        choices=[
++                            ("pending", "Pending"),
++                            ("running", "Running"),
++                            ("completed", "Completed"),
++                            ("failed", "Failed"),
++                        ],
++                        default="pending",
++                        max_length=16,
++                    ),
++                ),
++                ("result_label", models.CharField(blank=True, max_length=200)),
++                ("result_confidence", models.FloatField(blank=True, null=True)),
++                ("result_probabilities", models.JSONField(blank=True, null=True)),
++                (
++                    "gradcam_image",
++                    models.ImageField(blank=True, upload_to="runs/gradcam/"),
++                ),
++                ("error_message", models.TextField(blank=True)),
++                (
++                    "inference_time_ms",
++                    models.PositiveIntegerField(blank=True, null=True),
++                ),
++                ("ip_address", models.GenericIPAddressField(blank=True, null=True)),
++                (
++                    "user",
++                    models.ForeignKey(
++                        blank=True,
++                        null=True,
++                        on_delete=django.db.models.deletion.SET_NULL,
++                        related_name="inference_runs",
++                        to=settings.AUTH_USER_MODEL,
++                    ),
++                ),
++                (
++                    "model",
++                    models.ForeignKey(
++                        on_delete=django.db.models.deletion.CASCADE,
++                        related_name="runs",
++                        to="algorithms.mlmodel",
++                    ),
++                ),
++            ],
++            options={
++                "ordering": ["-created_at"],
++            },
++        ),
++        migrations.CreateModel(
++            name="BenchmarkEntry",
++            fields=[
++                (
++                    "id",
++                    models.BigAutoField(
++                        auto_created=True,
++                        primary_key=True,
++                        serialize=False,
++                        verbose_name="ID",
++                    ),
++                ),
++                ("model_name", models.CharField(max_length=200)),
++                ("pipeline_description", models.TextField(blank=True)),
++                ("order", models.PositiveIntegerField(default=0)),
++                ("metrics", models.JSONField(blank=True, default=dict)),
++                ("confusion_matrix", models.JSONField(blank=True, null=True)),
++                ("roc_data", models.JSONField(blank=True, null=True)),
++                ("training_details", models.JSONField(blank=True, default=dict)),
++                ("is_highlighted", models.BooleanField(default=False)),
++                (
++                    "benchmark",
++                    models.ForeignKey(
++                        on_delete=django.db.models.deletion.CASCADE,
++                        related_name="entries",
++                        to="algorithms.benchmark",
++                    ),
++                ),
++                (
++                    "model",
++                    models.ForeignKey(
++                        blank=True,
++                        null=True,
++                        on_delete=django.db.models.deletion.SET_NULL,
++                        related_name="benchmark_entries",
++                        to="algorithms.mlmodel",
++                    ),
++                ),
++            ],
++            options={
++                "ordering": ["order"],
++            },
++        ),
++        migrations.CreateModel(
++            name="ResearcherProfile",
++            fields=[
++                (
++                    "id",
++                    models.BigAutoField(
++                        auto_created=True,
++                        primary_key=True,
++                        serialize=False,
++                        verbose_name="ID",
++                    ),
++                ),
++                ("institution", models.CharField(max_length=200)),
++                ("orcid", models.CharField(blank=True, max_length=40)),
++                ("bio", models.TextField(blank=True)),
++                ("is_approved", models.BooleanField(default=False)),
++                (
++                    "user",
++                    models.OneToOneField(
++                        on_delete=django.db.models.deletion.CASCADE,
++                        related_name="researcher_profile",
++                        to=settings.AUTH_USER_MODEL,
++                    ),
++                ),
++            ],
++        ),
++        migrations.AddIndex(
++            model_name="mlmodel",
++            index=models.Index(fields=["status"], name="algorithms__status_46e367_idx"),
++        ),
++        migrations.AddIndex(
++            model_name="mlmodel",
++            index=models.Index(
++                fields=["modality", "body_region"],
++                name="algorithms__modalit_732632_idx",
++            ),
++        ),
++    ]
+diff --git a/algorithms/models.py b/algorithms/models.py
+index 49d7e71..7c56bb8 100644
+--- a/algorithms/models.py
++++ b/algorithms/models.py
+@@ -157,6 +157,237 @@ class Algorithm(models.Model):
+         return self.license.lower() == "commercial"
+ 
+ 
++class ResearcherProfile(models.Model):
++    user = models.OneToOneField(
++        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="researcher_profile"
++    )
++    institution = models.CharField(max_length=200)
++    orcid = models.CharField(max_length=40, blank=True)
++    bio = models.TextField(blank=True)
++    is_approved = models.BooleanField(default=False)
++
++    def __str__(self):
++        return f"{self.user.username} ({self.institution})"
++
++
++class MLModel(models.Model):
++    class Architecture(models.TextChoices):
++        RESNET18 = "resnet18", "ResNet-18"
++        RESNET34 = "resnet34", "ResNet-34"
++        RESNET50 = "resnet50", "ResNet-50"
++        RESNET101 = "resnet101", "ResNet-101"
++        RESNET152 = "resnet152", "ResNet-152"
++        EFFICIENTNET_B0 = "efficientnet_b0", "EfficientNet-B0"
++        EFFICIENTNET_B1 = "efficientnet_b1", "EfficientNet-B1"
++        EFFICIENTNET_B2 = "efficientnet_b2", "EfficientNet-B2"
++        EFFICIENTNET_B3 = "efficientnet_b3", "EfficientNet-B3"
++        EFFICIENTNET_B4 = "efficientnet_b4", "EfficientNet-B4"
++        EFFICIENTNET_B5 = "efficientnet_b5", "EfficientNet-B5"
++        EFFICIENTNET_B6 = "efficientnet_b6", "EfficientNet-B6"
++        EFFICIENTNET_B7 = "efficientnet_b7", "EfficientNet-B7"
++        VGG16 = "vgg16", "VGG-16"
++        VGG19 = "vgg19", "VGG-19"
++        DENSENET121 = "densenet121", "DenseNet-121"
++        DENSENET169 = "densenet169", "DenseNet-169"
++        DENSENET201 = "densenet201", "DenseNet-201"
++        MOBILENET_V2 = "mobilenet_v2", "MobileNet V2"
++        MOBILENET_V3_SMALL = "mobilenet_v3_small", "MobileNet V3 Small"
++        MOBILENET_V3_LARGE = "mobilenet_v3_large", "MobileNet V3 Large"
++        INCEPTION_V3 = "inception_v3", "Inception V3"
++        VIT_B_16 = "vit_b_16", "ViT-B/16"
++        VIT_B_32 = "vit_b_32", "ViT-B/32"
++        VIT_L_16 = "vit_l_16", "ViT-L/16"
++        VIT_L_32 = "vit_l_32", "ViT-L/32"
++        SWIN_T = "swin_t", "Swin-T"
++        SWIN_S = "swin_s", "Swin-S"
++        SWIN_B = "swin_b", "Swin-B"
++        CUSTOM = "custom", "Custom"
++
++    class Modality(models.TextChoices):
++        CT = "ct", "CT"
++        MRI = "mri", "MRI"
++        XRAY = "xray", "X-Ray"
++        ULTRASOUND = "ultrasound", "Ultrasound"
++        ENDOSCOPY = "endoscopy", "Endoscopy"
++        DERMOSCOPY = "dermoscopy", "Dermoscopy"
++        FUNDOSCOPY = "fundoscopy", "Fundoscopy"
++        HISTOPATHOLOGY = "histopathology", "Histopathology"
++        PET = "pet", "PET"
++        OTHER = "other", "Other"
++
++    class BodyRegion(models.TextChoices):
++        HEAD = "head", "Head"
++        CHEST = "chest", "Chest"
++        ABDOMEN = "abdomen", "Abdomen"
++        PELVIS = "pelvis", "Pelvis"
++        SPINE = "spine", "Spine"
++        UPPER_EXTREMITY = "upper_extremity", "Upper Extremity"
++        LOWER_EXTREMITY = "lower_extremity", "Lower Extremity"
++        SKIN = "skin", "Skin"
++        EYE = "eye", "Eye"
++        WHOLE_BODY = "whole_body", "Whole Body"
++        OTHER = "other", "Other"
++
++    class Status(models.TextChoices):
++        DRAFT = "draft", "Draft"
++        IN_REVIEW = "in_review", "In Review"
++        PUBLISHED = "published", "Published"
++        REJECTED = "rejected", "Rejected"
++
++    slug = models.SlugField(max_length=120, unique=True)
++    name = models.CharField(max_length=200)
++    researcher = models.ForeignKey(
++        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="ml_models"
++    )
++    description = models.TextField(blank=True)
++    created_at = models.DateTimeField(auto_now_add=True)
++    updated_at = models.DateTimeField(auto_now=True)
++
++    architecture = models.CharField(max_length=32, choices=Architecture.choices)
++    num_classes = models.PositiveIntegerField()
++    class_labels = models.JSONField(help_text='List of class label strings, e.g. ["Normal", "Stroke"]')
++    input_size = models.PositiveIntegerField(default=224)
++    input_channels = models.PositiveIntegerField(default=3)
++
++    modality = models.CharField(max_length=24, choices=Modality.choices)
++    body_region = models.CharField(max_length=24, choices=BodyRegion.choices)
++    clinical_task = models.CharField(max_length=200)
++    tags = models.JSONField(default=list, blank=True)
++
++    model_file = models.FileField(upload_to="models/pt_files/")
++    model_version = models.CharField(max_length=32, default="1.0.0")
++
++    custom_architecture_code = models.TextField(blank=True)
++
++    gradcam_enabled = models.BooleanField(default=True)
++    gradcam_target_layer = models.CharField(max_length=120, blank=True)
++    xai_script = models.TextField(blank=True)
++
++    preprocessing_mean = models.JSONField(default=list, blank=True)
++    preprocessing_std = models.JSONField(default=list, blank=True)
++    preprocessing_notes = models.TextField(blank=True)
++
++    reported_accuracy = models.FloatField(null=True, blank=True)
++    reported_auc = models.FloatField(null=True, blank=True)
++    reported_f1 = models.FloatField(null=True, blank=True)
++    reported_dataset = models.CharField(max_length=200, blank=True)
++    reported_dataset_size = models.PositiveIntegerField(null=True, blank=True)
++
++    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
++    is_public = models.BooleanField(default=True)
++
++    example_input = models.ImageField(upload_to="models/examples/", blank=True)
++    example_expected_label = models.CharField(max_length=120, blank=True)
++
++    class Meta:
++        ordering = ["-created_at"]
++        indexes = [
++            models.Index(fields=["status"]),
++            models.Index(fields=["modality", "body_region"]),
++        ]
++
++    def __str__(self):
++        return self.name
++
++    def save(self, *args, **kwargs):
++        if not self.slug:
++            self.slug = slugify(self.name)[:120]
++        if not self.preprocessing_mean:
++            self.preprocessing_mean = [0.485, 0.456, 0.406]
++        if not self.preprocessing_std:
++            self.preprocessing_std = [0.229, 0.224, 0.225]
++        super().save(*args, **kwargs)
++
++    def get_absolute_url(self):
++        return reverse("algorithms:model_detail", args=[self.slug])
++
++
++class InferenceRun(models.Model):
++    class Status(models.TextChoices):
++        PENDING = "pending", "Pending"
++        RUNNING = "running", "Running"
++        COMPLETED = "completed", "Completed"
++        FAILED = "failed", "Failed"
++
++    model = models.ForeignKey(MLModel, on_delete=models.CASCADE, related_name="runs")
++    user = models.ForeignKey(
++        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="inference_runs"
++    )
++    input_image = models.ImageField(upload_to="runs/inputs/")
++    created_at = models.DateTimeField(auto_now_add=True)
++    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
++    result_label = models.CharField(max_length=200, blank=True)
++    result_confidence = models.FloatField(null=True, blank=True)
++    result_probabilities = models.JSONField(null=True, blank=True)
++    gradcam_image = models.ImageField(upload_to="runs/gradcam/", blank=True)
++    error_message = models.TextField(blank=True)
++    inference_time_ms = models.PositiveIntegerField(null=True, blank=True)
++    ip_address = models.GenericIPAddressField(null=True, blank=True)
++
++    class Meta:
++        ordering = ["-created_at"]
++
++    def __str__(self):
++        return f"Run #{self.pk} on {self.model.name}"
++
++
++class Benchmark(models.Model):
++    class Status(models.TextChoices):
++        DRAFT = "draft", "Draft"
++        IN_REVIEW = "in_review", "In Review"
++        PUBLISHED = "published", "Published"
++        REJECTED = "rejected", "Rejected"
++
++    slug = models.SlugField(max_length=120, unique=True)
++    name = models.CharField(max_length=200)
++    description = models.TextField(blank=True)
++    researcher = models.ForeignKey(
++        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="benchmarks"
++    )
++    clinical_task = models.CharField(max_length=200)
++    modality = models.CharField(max_length=24, choices=MLModel.Modality.choices)
++    body_region = models.CharField(max_length=24, choices=MLModel.BodyRegion.choices)
++    dataset_name = models.CharField(max_length=200)
++    dataset_description = models.TextField(blank=True)
++    dataset_size = models.PositiveIntegerField(null=True, blank=True)
++    status = models.CharField(max_length=16, choices=Status.choices, default=Status.DRAFT)
++    created_at = models.DateTimeField(auto_now_add=True)
++    updated_at = models.DateTimeField(auto_now=True)
++
++    class Meta:
++        ordering = ["-created_at"]
++
++    def __str__(self):
++        return self.name
++
++    def save(self, *args, **kwargs):
++        if not self.slug:
++            self.slug = slugify(self.name)[:120]
++        super().save(*args, **kwargs)
++
++    def get_absolute_url(self):
++        return reverse("algorithms:benchmark_detail", args=[self.slug])
++
++
++class BenchmarkEntry(models.Model):
++    benchmark = models.ForeignKey(Benchmark, on_delete=models.CASCADE, related_name="entries")
++    model = models.ForeignKey(MLModel, on_delete=models.SET_NULL, null=True, blank=True, related_name="benchmark_entries")
++    model_name = models.CharField(max_length=200)
++    pipeline_description = models.TextField(blank=True)
++    order = models.PositiveIntegerField(default=0)
++    metrics = models.JSONField(default=dict, blank=True)
++    confusion_matrix = models.JSONField(null=True, blank=True)
++    roc_data = models.JSONField(null=True, blank=True)
++    training_details = models.JSONField(default=dict, blank=True)
++    is_highlighted = models.BooleanField(default=False)
++
++    class Meta:
++        ordering = ["order"]
++
++    def __str__(self):
++        return f"{self.model_name} in {self.benchmark.name}"
++
++
+ class Version(models.Model):
+     """An immutable release of an algorithm, pinned to a source commit."""
+ 
+diff --git a/algorithms/urls.py b/algorithms/urls.py
+index ebed4d1..88c18b0 100644
+--- a/algorithms/urls.py
++++ b/algorithms/urls.py
+@@ -1,6 +1,8 @@
+ from django.urls import path
+ 
+ from . import views
++from . import views_benchmark
++from . import views_models
+ 
+ app_name = "algorithms"
+ 
+@@ -8,4 +10,21 @@ urlpatterns = [
+     path("", views.home, name="home"),
+     path("explore/", views.explore, name="explore"),
+     path("algorithm/<slug:slug>/", views.detail, name="detail"),
++
++    # Model hub
++    path("models/", views_models.model_list, name="model_list"),
++    path("models/upload/", views_models.model_upload, name="model_upload"),
++    path("models/<slug:slug>/", views_models.model_detail, name="model_detail"),
++    path("models/<slug:slug>/run/", views_models.model_run, name="model_run"),
++    path("models/<slug:slug>/demo/", views_models.model_demo, name="model_demo"),
++    path("models/<slug:slug>/edit/", views_models.model_edit, name="model_edit"),
++    path("runs/<int:run_id>/", views_models.run_result, name="run_result"),
++    path("runs/<int:run_id>/status/", views_models.run_status, name="run_status"),
++
++    # Benchmarks
++    path("benchmarks/", views_benchmark.benchmark_list, name="benchmark_list"),
++    path("benchmarks/create/", views_benchmark.benchmark_create, name="benchmark_create"),
++    path("benchmarks/<slug:slug>/", views_benchmark.benchmark_detail, name="benchmark_detail"),
++    path("benchmarks/<slug:slug>/edit/", views_benchmark.benchmark_edit, name="benchmark_edit"),
++    path("benchmarks/<slug:slug>/compare/", views_benchmark.benchmark_compare, name="benchmark_compare"),
+ ]
+diff --git a/algorithms/views.py b/algorithms/views.py
+index b08c4e1..25fcb94 100644
+--- a/algorithms/views.py
++++ b/algorithms/views.py
+@@ -1,7 +1,7 @@
+ from django.db.models import Q
+ from django.shortcuts import get_object_or_404, render
+ 
+-from .models import Algorithm, Category, Field
++from .models import Algorithm, Benchmark, Category, Field, MLModel
+ 
+ 
+ def _filtered_algorithms(request):
+@@ -12,7 +12,6 @@ def _filtered_algorithms(request):
+     )
+     q = request.GET.get("q", "").strip()
+     if q:
+-        # v1 search: simple icontains. Swap for Postgres SearchVector in prod.
+         qs = qs.filter(
+             Q(name__icontains=q) | Q(blurb__icontains=q) | Q(author_handle__icontains=q)
+         )
+@@ -27,11 +26,15 @@ def _filtered_algorithms(request):
+ 
+ def home(request):
+     qs = Algorithm.objects.filter(status=Algorithm.Status.PUBLISHED).select_related("category")
++    ml_models = MLModel.objects.filter(status=MLModel.Status.PUBLISHED, is_public=True).select_related("researcher")[:6]
++    benchmarks = Benchmark.objects.filter(status=Benchmark.Status.PUBLISHED).select_related("researcher")[:3]
+     context = {
+         "featured": qs.order_by("-installs")[:6],
+         "newest": qs.order_by("-created_at")[:4],
+         "total": qs.count(),
+         "categories": Category.objects.all(),
++        "ml_models": ml_models,
++        "benchmarks": benchmarks,
+     }
+     return render(request, "algorithms/home.html", context)
+ 
+@@ -47,7 +50,6 @@ def explore(request):
+         "fields": Field.choices,
+         "count": qs.count(),
+     }
+-    # HTMX requests get just the results grid; full nav requests get the page.
+     if request.headers.get("HX-Request"):
+         return render(request, "algorithms/_results.html", context)
+     return render(request, "algorithms/explore.html", context)
+diff --git a/algorithms/views_benchmark.py b/algorithms/views_benchmark.py
+new file mode 100644
+index 0000000..ea2cb35
+--- /dev/null
++++ b/algorithms/views_benchmark.py
+@@ -0,0 +1,173 @@
++from django.contrib.auth.decorators import login_required
++from django.db.models import Q
++from django.shortcuts import get_object_or_404, redirect, render
++
++from .forms import BenchmarkEntryForm, BenchmarkForm
++from .models import Benchmark, BenchmarkEntry, MLModel
++
++
++def benchmark_list(request):
++    qs = Benchmark.objects.filter(status=Benchmark.Status.PUBLISHED).select_related("researcher")
++    q = request.GET.get("q", "").strip()
++    if q:
++        qs = qs.filter(Q(name__icontains=q) | Q(clinical_task__icontains=q))
++    modality = request.GET.get("modality", "").strip()
++    if modality:
++        qs = qs.filter(modality=modality)
++
++    context = {
++        "benchmarks": qs,
++        "q": q,
++        "active_modality": modality,
++        "modalities": MLModel.Modality.choices,
++        "count": qs.count(),
++    }
++    if request.headers.get("HX-Request"):
++        return render(request, "benchmarks/_benchmark_card.html", context)
++    return render(request, "benchmarks/list.html", context)
++
++
++def benchmark_detail(request, slug):
++    benchmark = get_object_or_404(
++        Benchmark.objects.select_related("researcher").prefetch_related("entries", "entries__model"),
++        slug=slug,
++    )
++    entries = benchmark.entries.all()
++    all_metric_keys = set()
++    for entry in entries:
++        if entry.metrics:
++            all_metric_keys.update(entry.metrics.keys())
++    metric_keys = sorted(all_metric_keys)
++
++    best_values = {}
++    for key in metric_keys:
++        values = [e.metrics.get(key) for e in entries if e.metrics and e.metrics.get(key) is not None]
++        if values:
++            best_values[key] = max(values) if key != "inference_time_ms" else min(values)
++
++    sort_by = request.GET.get("sort", "")
++    sort_dir = request.GET.get("dir", "desc")
++    if sort_by and sort_by in metric_keys:
++        entries_list = sorted(
++            entries,
++            key=lambda e: e.metrics.get(sort_by, -1) if e.metrics else -1,
++            reverse=(sort_dir == "desc"),
++        )
++    else:
++        entries_list = list(entries)
++
++    context = {
++        "benchmark": benchmark,
++        "entries": entries_list,
++        "metric_keys": metric_keys,
++        "best_values": best_values,
++        "sort_by": sort_by,
++        "sort_dir": sort_dir,
++    }
++    if request.headers.get("HX-Request"):
++        return render(request, "benchmarks/_comparison_table.html", context)
++    return render(request, "benchmarks/detail.html", context)
++
++
++@login_required
++def benchmark_create(request):
++    profile = getattr(request.user, "researcher_profile", None)
++    if not profile or not profile.is_approved:
++        return render(request, "benchmarks/create.html", {
++            "error": "You must have an approved researcher profile to create benchmarks.",
++            "form": None,
++        })
++
++    if request.method == "POST":
++        form = BenchmarkForm(request.POST)
++        if form.is_valid():
++            benchmark = form.save(commit=False)
++            benchmark.researcher = request.user
++            benchmark.status = Benchmark.Status.IN_REVIEW
++            benchmark.save()
++
++            entry_idx = 0
++            while True:
++                prefix = f"entry-{entry_idx}"
++                name = request.POST.get(f"{prefix}-model_name")
++                if name is None:
++                    break
++                if not name.strip():
++                    entry_idx += 1
++                    continue
++
++                metrics_text = request.POST.get(f"{prefix}-metrics_text", "")
++                metrics = {}
++                for line in metrics_text.strip().split("\n"):
++                    line = line.strip()
++                    if ":" in line:
++                        k, v = line.split(":", 1)
++                        try:
++                            metrics[k.strip()] = float(v.strip())
++                        except ValueError:
++                            pass
++
++                model_id = request.POST.get(f"{prefix}-model")
++                linked_model = None
++                if model_id:
++                    try:
++                        linked_model = MLModel.objects.get(pk=int(model_id))
++                    except (MLModel.DoesNotExist, ValueError):
++                        pass
++
++                BenchmarkEntry.objects.create(
++                    benchmark=benchmark,
++                    model=linked_model,
++                    model_name=name.strip(),
++                    pipeline_description=request.POST.get(f"{prefix}-pipeline_description", ""),
++                    order=entry_idx,
++                    metrics=metrics,
++                    is_highlighted=request.POST.get(f"{prefix}-is_highlighted") == "on",
++                )
++                entry_idx += 1
++
++            return redirect("algorithms:benchmark_detail", slug=benchmark.slug)
++    else:
++        form = BenchmarkForm()
++
++    published_models = MLModel.objects.filter(status=MLModel.Status.PUBLISHED)
++    return render(request, "benchmarks/create.html", {
++        "form": form,
++        "published_models": published_models,
++    })
++
++
++@login_required
++def benchmark_edit(request, slug):
++    benchmark = get_object_or_404(Benchmark, slug=slug, researcher=request.user)
++    if request.method == "POST":
++        form = BenchmarkForm(request.POST, instance=benchmark)
++        if form.is_valid():
++            form.save()
++            return redirect("algorithms:benchmark_detail", slug=benchmark.slug)
++    else:
++        form = BenchmarkForm(instance=benchmark)
++    return render(request, "benchmarks/create.html", {
++        "form": form,
++        "editing": True,
++        "benchmark": benchmark,
++    })
++
++
++def benchmark_compare(request, slug):
++    benchmark = get_object_or_404(Benchmark, slug=slug)
++    entry_ids = request.GET.getlist("entries")
++    entries = BenchmarkEntry.objects.filter(benchmark=benchmark, pk__in=entry_ids)
++
++    all_metric_keys = set()
++    for entry in entries:
++        if entry.metrics:
++            all_metric_keys.update(entry.metrics.keys())
++    metric_keys = sorted(all_metric_keys)
++
++    context = {
++        "benchmark": benchmark,
++        "entries": entries,
++        "metric_keys": metric_keys,
++    }
++    return render(request, "benchmarks/_compare_selected.html", context)
+diff --git a/algorithms/views_models.py b/algorithms/views_models.py
+new file mode 100644
+index 0000000..5046090
+--- /dev/null
++++ b/algorithms/views_models.py
+@@ -0,0 +1,284 @@
++import io
++import os
++import time
++
++import torch
++from django.conf import settings
++from django.contrib.auth.decorators import login_required
++from django.core.files.base import ContentFile
++from django.db.models import Q
++from django.http import HttpResponseForbidden
++from django.shortcuts import get_object_or_404, redirect, render
++from django.utils import timezone
++
++from django.contrib.auth import login
++
++from .forms import InferenceUploadForm, MLModelForm, RegistrationForm
++from .inference import generate_gradcam, load_model, preprocess_image, run_inference
++from .models import InferenceRun, MLModel
++
++
++def _get_client_ip(request):
++    xff = request.META.get("HTTP_X_FORWARDED_FOR")
++    if xff:
++        return xff.split(",")[0].strip()
++    return request.META.get("REMOTE_ADDR")
++
++
++def _check_rate_limit(request):
++    ip = _get_client_ip(request)
++    if not ip:
++        return False
++    one_hour_ago = timezone.now() - timezone.timedelta(hours=1)
++    count = InferenceRun.objects.filter(ip_address=ip, created_at__gte=one_hour_ago).count()
++    return count >= 20
++
++
++def model_list(request):
++    qs = MLModel.objects.filter(status=MLModel.Status.PUBLISHED, is_public=True).select_related("researcher")
++    q = request.GET.get("q", "").strip()
++    if q:
++        qs = qs.filter(
++            Q(name__icontains=q) | Q(clinical_task__icontains=q) | Q(tags__icontains=q)
++        )
++    modality = request.GET.get("modality", "").strip()
++    if modality:
++        qs = qs.filter(modality=modality)
++    body_region = request.GET.get("body_region", "").strip()
++    if body_region:
++        qs = qs.filter(body_region=body_region)
++    architecture = request.GET.get("architecture", "").strip()
++    if architecture:
++        qs = qs.filter(architecture=architecture)
++
++    context = {
++        "models": qs,
++        "q": q,
++        "active_modality": modality,
++        "active_body_region": body_region,
++        "active_architecture": architecture,
++        "modalities": MLModel.Modality.choices,
++        "body_regions": MLModel.BodyRegion.choices,
++        "architectures": MLModel.Architecture.choices,
++        "count": qs.count(),
++    }
++    if request.headers.get("HX-Request"):
++        return render(request, "models/_results_grid.html", context)
++    return render(request, "models/list.html", context)
++
++
++@login_required
++def model_upload(request):
++    profile = getattr(request.user, "researcher_profile", None)
++    if not profile or not profile.is_approved:
++        return render(request, "models/upload.html", {
++            "error": "You must have an approved researcher profile to upload models.",
++            "form": None,
++        })
++
++    if request.method == "POST":
++        form = MLModelForm(request.POST, request.FILES)
++        if form.is_valid():
++            ml_model = form.save(commit=False)
++            ml_model.researcher = request.user
++            ml_model.status = MLModel.Status.IN_REVIEW
++            ml_model.save()
++
++            try:
++                model = load_model(ml_model)
++                dummy = torch.randn(1, ml_model.input_channels, ml_model.input_size, ml_model.input_size)
++                with torch.no_grad():
++                    model(dummy)
++            except Exception as e:
++                ml_model.delete()
++                form.add_error("model_file", f"Model validation failed: {e}")
++                return render(request, "models/upload.html", {"form": form})
++
++            return render(request, "models/upload_success.html", {"ml_model": ml_model})
++    else:
++        form = MLModelForm()
++
++    return render(request, "models/upload.html", {"form": form})
++
++
++def model_detail(request, slug):
++    ml_model = get_object_or_404(
++        MLModel.objects.select_related("researcher"),
++        slug=slug,
++    )
++    benchmarks = ml_model.benchmark_entries.select_related("benchmark").filter(
++        benchmark__status="published"
++    )
++    from .models import Algorithm
++    related_algos = Algorithm.objects.filter(
++        status=Algorithm.Status.PUBLISHED
++    ).filter(
++        Q(field="medical")
++    )[:5]
++
++    context = {
++        "ml_model": ml_model,
++        "upload_form": InferenceUploadForm(),
++        "benchmarks": benchmarks,
++        "related_algos": related_algos,
++    }
++    return render(request, "models/detail.html", context)
++
++
++def model_run(request, slug):
++    ml_model = get_object_or_404(MLModel, slug=slug, status=MLModel.Status.PUBLISHED)
++
++    if _check_rate_limit(request):
++        return render(request, "models/_inference_error.html", {
++            "error": "Rate limit exceeded. Maximum 20 inference runs per hour. Please try again later."
++        })
++
++    if request.method != "POST":
++        return redirect("algorithms:model_detail", slug=slug)
++
++    form = InferenceUploadForm(request.POST, request.FILES)
++    if not form.is_valid():
++        return render(request, "models/_inference_error.html", {
++            "error": "Please upload a valid image file."
++        })
++
++    run = InferenceRun(
++        model=ml_model,
++        user=request.user if request.user.is_authenticated else None,
++        input_image=form.cleaned_data["image"],
++        status=InferenceRun.Status.RUNNING,
++        ip_address=_get_client_ip(request),
++    )
++    run.save()
++
++    try:
++        result = run_inference(ml_model, run.input_image.path)
++        run.result_label = result["predicted_label"]
++        run.result_confidence = result["confidence"]
++        run.result_probabilities = result["probabilities"]
++        run.inference_time_ms = result["inference_time_ms"]
++
++        if ml_model.gradcam_enabled and ml_model.architecture != "custom":
++            try:
++                gradcam_img = generate_gradcam(
++                    ml_model, run.input_image.path, result["predicted_class_index"]
++                )
++                if gradcam_img:
++                    buf = io.BytesIO()
++                    gradcam_img.save(buf, format="PNG")
++                    buf.seek(0)
++                    run.gradcam_image.save(
++                        f"gradcam_{run.pk}.png", ContentFile(buf.read()), save=False
++                    )
++            except Exception:
++                pass
++
++        run.status = InferenceRun.Status.COMPLETED
++        run.save()
++
++        return render(request, "models/_inference_result.html", {
++            "run": run, "ml_model": ml_model
++        })
++
++    except Exception as e:
++        run.status = InferenceRun.Status.FAILED
++        run.error_message = str(e)
++        run.save()
++        return render(request, "models/_inference_error.html", {"error": str(e)})
++
++
++def model_demo(request, slug):
++    ml_model = get_object_or_404(MLModel, slug=slug, status=MLModel.Status.PUBLISHED)
++
++    if not ml_model.example_input:
++        return render(request, "models/_inference_error.html", {
++            "error": "No demo image available for this model."
++        })
++
++    if _check_rate_limit(request):
++        return render(request, "models/_inference_error.html", {
++            "error": "Rate limit exceeded. Maximum 20 inference runs per hour."
++        })
++
++    run = InferenceRun(
++        model=ml_model,
++        user=request.user if request.user.is_authenticated else None,
++        input_image=ml_model.example_input,
++        status=InferenceRun.Status.RUNNING,
++        ip_address=_get_client_ip(request),
++    )
++    run.save()
++
++    try:
++        result = run_inference(ml_model, ml_model.example_input.path)
++        run.result_label = result["predicted_label"]
++        run.result_confidence = result["confidence"]
++        run.result_probabilities = result["probabilities"]
++        run.inference_time_ms = result["inference_time_ms"]
++
++        if ml_model.gradcam_enabled and ml_model.architecture != "custom":
++            try:
++                gradcam_img = generate_gradcam(
++                    ml_model, ml_model.example_input.path, result["predicted_class_index"]
++                )
++                if gradcam_img:
++                    buf = io.BytesIO()
++                    gradcam_img.save(buf, format="PNG")
++                    buf.seek(0)
++                    run.gradcam_image.save(
++                        f"gradcam_{run.pk}.png", ContentFile(buf.read()), save=False
++                    )
++            except Exception:
++                pass
++
++        run.status = InferenceRun.Status.COMPLETED
++        run.save()
++        return render(request, "models/_inference_result.html", {
++            "run": run, "ml_model": ml_model
++        })
++    except Exception as e:
++        run.status = InferenceRun.Status.FAILED
++        run.error_message = str(e)
++        run.save()
++        return render(request, "models/_inference_error.html", {"error": str(e)})
++
++
++@login_required
++def model_edit(request, slug):
++    ml_model = get_object_or_404(MLModel, slug=slug, researcher=request.user)
++
++    if request.method == "POST":
++        form = MLModelForm(request.POST, request.FILES, instance=ml_model)
++        if form.is_valid():
++            form.save()
++            return redirect("algorithms:model_detail", slug=ml_model.slug)
++    else:
++        form = MLModelForm(instance=ml_model)
++
++    return render(request, "models/upload.html", {"form": form, "editing": True, "ml_model": ml_model})
++
++
++def run_result(request, run_id):
++    run = get_object_or_404(InferenceRun.objects.select_related("model"), pk=run_id)
++    return render(request, "models/run_detail.html", {"run": run, "ml_model": run.model})
++
++
++def run_status(request, run_id):
++    run = get_object_or_404(InferenceRun, pk=run_id)
++    if run.status in (InferenceRun.Status.COMPLETED, InferenceRun.Status.FAILED):
++        return render(request, "models/_inference_result.html", {
++            "run": run, "ml_model": run.model
++        })
++    return render(request, "models/_inference_loading.html", {"run": run})
++
++
++def register_view(request):
++    if request.method == "POST":
++        form = RegistrationForm(request.POST)
++        if form.is_valid():
++            user = form.save()
++            login(request, user)
++            return redirect("algorithms:home")
++    else:
++        form = RegistrationForm()
++    return render(request, "registration/register.html", {"form": form})
+diff --git a/config/settings.py b/config/settings.py
+index dc4e884..31488de 100644
+--- a/config/settings.py
++++ b/config/settings.py
+@@ -124,6 +124,18 @@ STORAGES = {
+ 
+ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+ 
++# --- Media files (uploaded models, images, results) ---------------------
++MEDIA_URL = "/media/"
++MEDIA_ROOT = BASE_DIR / "media"
++
++# Model inference settings
++MAX_MODEL_SIZE_MB = 500
++MODEL_CACHE_SIZE = 5
++INFERENCE_TIMEOUT_SECONDS = 60
++
++DATA_UPLOAD_MAX_MEMORY_SIZE = 500 * 1024 * 1024
++FILE_UPLOAD_MAX_MEMORY_SIZE = 500 * 1024 * 1024
++
+ 
+ # --- Domain constants ---------------------------------------------------
+ # Major.minor core lines the registry tracks compatibility against.
+diff --git a/config/urls.py b/config/urls.py
+index 3e83d93..dbced03 100644
+--- a/config/urls.py
++++ b/config/urls.py
+@@ -1,7 +1,18 @@
++from django.conf import settings
++from django.conf.urls.static import static
+ from django.contrib import admin
++from django.contrib.auth import views as auth_views
+ from django.urls import include, path
+ 
++from algorithms.views_models import register_view
++
+ urlpatterns = [
+     path("admin/", admin.site.urls),
++    path("accounts/login/", auth_views.LoginView.as_view(), name="login"),
++    path("accounts/logout/", auth_views.LogoutView.as_view(), name="logout"),
++    path("accounts/register/", register_view, name="register"),
+     path("", include("algorithms.urls")),
+ ]
++
++if settings.DEBUG:
++    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+diff --git a/requirements.txt b/requirements.txt
+index bda8906..0899afa 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -5,3 +5,9 @@ whitenoise>=6.6
+ gunicorn>=22.0
+ markdown>=3.6
+ python-dotenv>=1.0
++torch>=2.1 --index-url https://download.pytorch.org/whl/cpu
++torchvision>=0.16 --index-url https://download.pytorch.org/whl/cpu
++Pillow>=10.0
++pydicom>=2.4
++nibabel>=4.0
++matplotlib>=3.8
+diff --git a/templates/algorithms/home.html b/templates/algorithms/home.html
+index bbed907..39c89f3 100644
+--- a/templates/algorithms/home.html
++++ b/templates/algorithms/home.html
+@@ -6,11 +6,13 @@
+ <section class="mb-8">
+   <h1 class="text-3xl font-semibold text-accent-ink">Share, read, and reproduce algorithms.</h1>
+   <p class="text-slate-500 mt-2 max-w-2xl">
+-    An open registry where researchers publish algorithms, others read about them and reproduce them.
+-    We host the knowledge and the pointers — the code and data stay where they live.
++    An open registry where researchers publish algorithms, upload trained models, and run inference — all in one platform.
++    Browse the registry, run models on your images, and compare benchmarks.
+   </p>
+-  <div class="mt-4 flex gap-3">
++  <div class="mt-4 flex gap-3 flex-wrap">
+     <a href="{% url 'algorithms:explore' %}" class="px-4 py-2 rounded-lg bg-accent text-white text-sm hover:opacity-90">Browse {{ total }} algorithms</a>
++    <a href="{% url 'algorithms:model_list' %}" class="px-4 py-2 rounded-lg border border-accent text-accent text-sm hover:bg-accent/5">Run Models</a>
++    <a href="{% url 'algorithms:benchmark_list' %}" class="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 text-sm hover:border-accent hover:text-accent">Benchmarks</a>
+   </div>
+ </section>
+ 
+@@ -23,6 +25,30 @@
+ </section>
+ {% endif %}
+ 
++{% if ml_models %}
++<section class="mb-8">
++  <div class="flex items-center justify-between mb-3">
++    <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400">Run Models</h2>
++    <a href="{% url 'algorithms:model_list' %}" class="text-xs text-accent hover:underline">View all</a>
++  </div>
++  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
++    {% for m in ml_models %}{% include "models/_model_card.html" %}{% endfor %}
++  </div>
++</section>
++{% endif %}
++
++{% if benchmarks %}
++<section class="mb-8">
++  <div class="flex items-center justify-between mb-3">
++    <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400">Recent Benchmarks</h2>
++    <a href="{% url 'algorithms:benchmark_list' %}" class="text-xs text-accent hover:underline">View all</a>
++  </div>
++  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
++    {% for b in benchmarks %}{% include "benchmarks/_benchmark_card.html" %}{% endfor %}
++  </div>
++</section>
++{% endif %}
++
+ <section>
+   <h2 class="text-sm font-semibold uppercase tracking-wide text-slate-400 mb-3">Categories</h2>
+   <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+diff --git a/templates/base.html b/templates/base.html
+index 0282220..3923f3d 100644
+--- a/templates/base.html
++++ b/templates/base.html
+@@ -32,10 +32,23 @@
+       <nav class="space-y-1 text-sm">
+         <a href="{% url 'algorithms:home' %}" class="block px-3 py-2 rounded-lg hover:bg-slate-100">Home</a>
+         <a href="{% url 'algorithms:explore' %}" class="block px-3 py-2 rounded-lg hover:bg-slate-100">Explore</a>
++        <a href="{% url 'algorithms:model_list' %}" class="block px-3 py-2 rounded-lg hover:bg-slate-100">Model Hub</a>
++        <a href="{% url 'algorithms:benchmark_list' %}" class="block px-3 py-2 rounded-lg hover:bg-slate-100">Benchmarks</a>
+         <a href="/admin/" class="block px-3 py-2 rounded-lg hover:bg-slate-100 text-slate-400">Admin</a>
+       </nav>
+-      <p class="mt-8 text-xs text-slate-400 leading-relaxed">
+-        A registry &amp; knowledge layer. We host metadata and pointers — never the code, weights, or data.
++      {% if user.is_authenticated %}
++      <div class="mt-6 text-xs text-slate-400">
++        Signed in as <span class="font-medium text-slate-600">{{ user.username }}</span>
++        <a href="{% url 'logout' %}" class="block mt-1 text-accent hover:underline">Sign out</a>
++      </div>
++      {% else %}
++      <div class="mt-6 space-y-1 text-sm">
++        <a href="{% url 'login' %}" class="block px-3 py-2 rounded-lg bg-accent/10 text-accent hover:bg-accent/20">Sign in</a>
++        <a href="{% url 'register' %}" class="block px-3 py-2 rounded-lg hover:bg-slate-100 text-slate-500">Register</a>
++      </div>
++      {% endif %}
++      <p class="mt-6 text-xs text-slate-400 leading-relaxed">
++        A registry, inference, &amp; benchmarking platform for medical imaging algorithms.
+       </p>
+     </aside>
+ 
+diff --git a/templates/benchmarks/_benchmark_card.html b/templates/benchmarks/_benchmark_card.html
+new file mode 100644
+index 0000000..8988f88
+--- /dev/null
++++ b/templates/benchmarks/_benchmark_card.html
+@@ -0,0 +1,14 @@
++<a href="{{ b.get_absolute_url }}"
++   class="block bg-white rounded-xl border border-slate-200 p-4 hover:border-accent hover:shadow-sm transition">
++  <div class="flex items-start justify-between gap-2">
++    <h3 class="font-semibold text-accent-ink leading-tight">{{ b.name }}</h3>
++    <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-accent/10 text-accent shrink-0">{{ b.get_modality_display }}</span>
++  </div>
++  <p class="text-xs text-slate-500 mt-0.5">{{ b.clinical_task }}</p>
++  <p class="text-sm text-slate-600 mt-2 line-clamp-2">{{ b.description }}</p>
++  <div class="flex items-center gap-3 mt-3 text-xs text-slate-400">
++    <span>{{ b.entries.count }} models</span>
++    <span>{{ b.dataset_name }}</span>
++    <span class="ml-auto font-mono">{{ b.researcher.username }}</span>
++  </div>
++</a>
+diff --git a/templates/benchmarks/_compare_selected.html b/templates/benchmarks/_compare_selected.html
+new file mode 100644
+index 0000000..6991000
+--- /dev/null
++++ b/templates/benchmarks/_compare_selected.html
+@@ -0,0 +1,30 @@
++<div class="bg-white rounded-xl border border-slate-200 p-5">
++  <h3 class="font-semibold text-accent-ink mb-4">Side-by-Side Comparison</h3>
++
++  <div class="overflow-x-auto">
++    <table class="w-full text-sm">
++      <thead>
++        <tr class="border-b border-slate-200">
++          <th class="text-left px-4 py-2 text-slate-500">Metric</th>
++          {% for entry in entries %}
++          <th class="text-right px-4 py-2 font-medium text-accent-ink">{{ entry.model_name }}</th>
++          {% endfor %}
++        </tr>
++      </thead>
++      <tbody>
++        {% for key in metric_keys %}
++        <tr class="border-b border-slate-100">
++          <td class="px-4 py-2 text-slate-600 capitalize">{{ key }}</td>
++          {% for entry in entries %}
++          <td class="text-right px-4 py-2">
++            {% if entry.metrics %}
++              {% for mk, mv in entry.metrics.items %}{% if mk == key %}{{ mv }}{% endif %}{% endfor %}
++            {% else %}-{% endif %}
++          </td>
++          {% endfor %}
++        </tr>
++        {% endfor %}
++      </tbody>
++    </table>
++  </div>
++</div>
+diff --git a/templates/benchmarks/_comparison_table.html b/templates/benchmarks/_comparison_table.html
+new file mode 100644
+index 0000000..8a23571
+--- /dev/null
++++ b/templates/benchmarks/_comparison_table.html
+@@ -0,0 +1,49 @@
++<div class="bg-white rounded-xl border border-slate-200 overflow-hidden">
++  <div class="overflow-x-auto">
++    <table class="w-full text-sm">
++      <thead>
++        <tr class="bg-slate-50 border-b border-slate-200">
++          <th class="text-left px-4 py-3 font-medium text-slate-600">#</th>
++          <th class="text-left px-4 py-3 font-medium text-slate-600">Model</th>
++          {% for key in metric_keys %}
++          <th class="text-right px-4 py-3 font-medium text-slate-600 cursor-pointer hover:text-accent"
++              hx-get="{% url 'algorithms:benchmark_detail' benchmark.slug %}?sort={{ key }}&dir={% if sort_by == key and sort_dir == 'desc' %}asc{% else %}desc{% endif %}"
++              hx-target="closest .bg-white"
++              hx-swap="outerHTML">
++            <span class="capitalize">{{ key }}</span>
++            {% if sort_by == key %}
++              <span class="ml-1">{% if sort_dir == 'desc' %}&#9660;{% else %}&#9650;{% endif %}</span>
++            {% endif %}
++          </th>
++          {% endfor %}
++          <th class="px-4 py-3"></th>
++        </tr>
++      </thead>
++      <tbody>
++        {% for entry in entries %}
++        <tr class="border-b border-slate-100 {% if entry.is_highlighted %}bg-amber-50/50{% elif forloop.counter|divisibleby:2 %}bg-slate-50/50{% endif %} hover:bg-slate-50">
++          <td class="px-4 py-3 text-slate-400">{{ forloop.counter }}</td>
++          <td class="px-4 py-3 font-medium text-accent-ink">
++            {{ entry.model_name }}
++            {% if entry.is_highlighted %}<span class="ml-1 text-amber-500">&#127942;</span>{% endif %}
++          </td>
++          {% for key in metric_keys %}
++          <td class="text-right px-4 py-3 {% if entry.metrics and best_values|dictsort:key and entry.metrics.key == best_values.key %}text-emerald-600 font-semibold{% endif %}">
++            {% if entry.metrics %}
++              {% for mk, mv in entry.metrics.items %}
++                {% if mk == key %}{{ mv }}{% endif %}
++              {% endfor %}
++            {% else %}-{% endif %}
++          </td>
++          {% endfor %}
++          <td class="px-4 py-3">
++            {% if entry.model %}
++            <a href="{{ entry.model.get_absolute_url }}" class="text-xs text-accent hover:underline">Try</a>
++            {% endif %}
++          </td>
++        </tr>
++        {% endfor %}
++      </tbody>
++    </table>
++  </div>
++</div>
+diff --git a/templates/benchmarks/create.html b/templates/benchmarks/create.html
+new file mode 100644
+index 0000000..d78e775
+--- /dev/null
++++ b/templates/benchmarks/create.html
+@@ -0,0 +1,158 @@
++{% extends "base.html" %}
++{% block title %}{% if editing %}Edit{% else %}Create{% endif %} Benchmark · MedAlgo Hub{% endblock %}
++{% block breadcrumb %}Benchmarks / {% if editing %}Edit{% else %}Create{% endif %}{% endblock %}
++
++{% block content %}
++<h1 class="text-2xl font-semibold text-accent-ink mb-1">{% if editing %}Edit Benchmark{% else %}Create a Benchmark{% endif %}</h1>
++<p class="text-slate-500 mb-5">Compare multiple models on the same task and dataset.</p>
++
++{% if error %}
++<div class="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-5 text-sm text-rose-700">{{ error }}</div>
++{% endif %}
++
++{% if form %}
++<form method="post" class="space-y-6 max-w-3xl">
++  {% csrf_token %}
++
++  {% if form.errors %}
++  <div class="bg-rose-50 border border-rose-200 rounded-xl p-4 text-sm text-rose-700">{{ form.errors }}</div>
++  {% endif %}
++
++  <div class="bg-white rounded-xl border border-slate-200 p-5">
++    <h2 class="font-semibold text-accent-ink mb-4">Benchmark Information</h2>
++    <div class="space-y-4">
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Name</label>
++        <input type="text" name="name" value="{{ form.name.value|default_if_none:'' }}" required
++               class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm">
++      </div>
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Description</label>
++        <textarea name="description" rows="4"
++                  class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm">{{ form.description.value|default_if_none:'' }}</textarea>
++      </div>
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Clinical Task</label>
++        <input type="text" name="clinical_task" value="{{ form.clinical_task.value|default_if_none:'' }}" required
++               class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm">
++      </div>
++      <div class="grid grid-cols-2 gap-4">
++        <div>
++          <label class="block text-sm font-medium text-slate-700 mb-1">Modality</label>
++          <select name="modality" required class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++            {% for value, label in form.modality.field.choices %}
++            <option value="{{ value }}" {% if form.modality.value == value %}selected{% endif %}>{{ label }}</option>
++            {% endfor %}
++          </select>
++        </div>
++        <div>
++          <label class="block text-sm font-medium text-slate-700 mb-1">Body Region</label>
++          <select name="body_region" required class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++            {% for value, label in form.body_region.field.choices %}
++            <option value="{{ value }}" {% if form.body_region.value == value %}selected{% endif %}>{{ label }}</option>
++            {% endfor %}
++          </select>
++        </div>
++      </div>
++      <div class="grid grid-cols-2 gap-4">
++        <div>
++          <label class="block text-sm font-medium text-slate-700 mb-1">Dataset Name</label>
++          <input type="text" name="dataset_name" value="{{ form.dataset_name.value|default_if_none:'' }}" required
++                 class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++        </div>
++        <div>
++          <label class="block text-sm font-medium text-slate-700 mb-1">Dataset Size</label>
++          <input type="number" name="dataset_size" value="{{ form.dataset_size.value|default_if_none:'' }}"
++                 class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++        </div>
++      </div>
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Dataset Description</label>
++        <textarea name="dataset_description" rows="3"
++                  class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">{{ form.dataset_description.value|default_if_none:'' }}</textarea>
++      </div>
++    </div>
++  </div>
++
++  <!-- Entries -->
++  <div class="bg-white rounded-xl border border-slate-200 p-5" id="entries-container">
++    <h2 class="font-semibold text-accent-ink mb-4">Model Entries</h2>
++    <div id="entry-list" class="space-y-4">
++      <div class="entry-row border border-slate-100 rounded-lg p-4" data-index="0">
++        <div class="grid grid-cols-2 gap-4 mb-3">
++          <div>
++            <label class="block text-xs font-medium text-slate-700 mb-1">Model Name</label>
++            <input type="text" name="entry-0-model_name" required
++                   class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" placeholder="e.g. ResNet18 (ImageNet pretrain)">
++          </div>
++          <div>
++            <label class="block text-xs font-medium text-slate-700 mb-1">Link to Platform Model (optional)</label>
++            <select name="entry-0-model" class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++              <option value="">-- None --</option>
++              {% for m in published_models %}
++              <option value="{{ m.pk }}">{{ m.name }}</option>
++              {% endfor %}
++            </select>
++          </div>
++        </div>
++        <div class="mb-3">
++          <label class="block text-xs font-medium text-slate-700 mb-1">Pipeline Description</label>
++          <textarea name="entry-0-pipeline_description" rows="2"
++                    class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"></textarea>
++        </div>
++        <div class="mb-3">
++          <label class="block text-xs font-medium text-slate-700 mb-1">Metrics (one per line: name: value)</label>
++          <textarea name="entry-0-metrics_text" rows="3"
++                    class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm font-mono"
++                    placeholder="accuracy: 0.92&#10;auc: 0.96&#10;f1: 0.91"></textarea>
++        </div>
++        <label class="flex items-center gap-2 text-xs">
++          <input type="checkbox" name="entry-0-is_highlighted" class="rounded">
++          Highlight as best
++        </label>
++      </div>
++    </div>
++    <button type="button" onclick="addEntry()" class="mt-4 text-sm text-accent hover:underline">+ Add Model Entry</button>
++  </div>
++
++  <button type="submit" class="px-6 py-3 rounded-lg bg-accent text-white font-medium hover:opacity-90">
++    {% if editing %}Save Changes{% else %}Submit for Review{% endif %}
++  </button>
++</form>
++
++<script>
++let entryCount = 1;
++function addEntry() {
++  const idx = entryCount++;
++  const html = `
++  <div class="entry-row border border-slate-100 rounded-lg p-4" data-index="${idx}">
++    <div class="grid grid-cols-2 gap-4 mb-3">
++      <div>
++        <label class="block text-xs font-medium text-slate-700 mb-1">Model Name</label>
++        <input type="text" name="entry-${idx}-model_name" required class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++      </div>
++      <div>
++        <label class="block text-xs font-medium text-slate-700 mb-1">Link to Platform Model</label>
++        <select name="entry-${idx}-model" class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++          <option value="">-- None --</option>
++          {% for m in published_models %}<option value="{{ m.pk }}">{{ m.name }}</option>{% endfor %}
++        </select>
++      </div>
++    </div>
++    <div class="mb-3">
++      <label class="block text-xs font-medium text-slate-700 mb-1">Pipeline Description</label>
++      <textarea name="entry-${idx}-pipeline_description" rows="2" class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"></textarea>
++    </div>
++    <div class="mb-3">
++      <label class="block text-xs font-medium text-slate-700 mb-1">Metrics</label>
++      <textarea name="entry-${idx}-metrics_text" rows="3" class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm font-mono" placeholder="accuracy: 0.92&#10;auc: 0.96"></textarea>
++    </div>
++    <label class="flex items-center gap-2 text-xs">
++      <input type="checkbox" name="entry-${idx}-is_highlighted" class="rounded"> Highlight as best
++    </label>
++  </div>`;
++  document.getElementById('entry-list').insertAdjacentHTML('beforeend', html);
++}
++</script>
++{% endif %}
++{% endblock %}
+diff --git a/templates/benchmarks/detail.html b/templates/benchmarks/detail.html
+new file mode 100644
+index 0000000..d2861f7
+--- /dev/null
++++ b/templates/benchmarks/detail.html
+@@ -0,0 +1,111 @@
++{% extends "base.html" %}
++{% block title %}{{ benchmark.name }} · MedAlgo Hub{% endblock %}
++{% block breadcrumb %}Benchmarks / {{ benchmark.name }}{% endblock %}
++
++{% block content %}
++<style>
++  @media print {
++    aside, header, nav { display: none !important; }
++    main { margin: 0; padding: 0; }
++    .no-print { display: none !important; }
++  }
++  .bar-animate { animation: growBar 0.6s ease-out forwards; }
++  @keyframes growBar { from { width: 0; } }
++</style>
++
++<div class="mb-6">
++  <div class="flex items-center gap-2 flex-wrap">
++    <h1 class="text-2xl font-semibold text-accent-ink">{{ benchmark.name }}</h1>
++    <span class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-accent/10 text-accent">{{ benchmark.get_modality_display }}</span>
++  </div>
++  <p class="text-sm text-slate-500 mt-1">
++    {{ benchmark.clinical_task }} · {{ benchmark.get_body_region_display }} ·
++    by <span class="font-medium">{{ benchmark.researcher.username }}</span>
++  </p>
++  {% if benchmark.description %}
++  <p class="text-slate-600 mt-3 max-w-3xl">{{ benchmark.description }}</p>
++  {% endif %}
++</div>
++
++<!-- Dataset Info -->
++<div class="bg-white rounded-xl border border-slate-200 p-4 mb-6 text-sm">
++  <h3 class="font-semibold text-accent-ink mb-2">Dataset</h3>
++  <dl class="grid grid-cols-2 md:grid-cols-4 gap-2">
++    <div><dt class="text-slate-500">Name</dt><dd class="font-medium">{{ benchmark.dataset_name }}</dd></div>
++    {% if benchmark.dataset_size %}<div><dt class="text-slate-500">Size</dt><dd>{{ benchmark.dataset_size }} samples</dd></div>{% endif %}
++    {% if benchmark.dataset_description %}<div class="col-span-2"><dt class="text-slate-500">Description</dt><dd>{{ benchmark.dataset_description }}</dd></div>{% endif %}
++  </dl>
++</div>
++
++<!-- Comparison Table -->
++{% include "benchmarks/_comparison_table.html" %}
++
++<!-- Bar Charts -->
++{% if metric_keys %}
++<div class="mt-8">
++  <h2 class="font-semibold text-accent-ink mb-4">Metric Comparison</h2>
++  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
++    {% for key in metric_keys %}
++    <div class="bg-white rounded-xl border border-slate-200 p-4">
++      <h3 class="text-sm font-medium text-slate-600 mb-3 capitalize">{{ key }}</h3>
++      <div class="space-y-2">
++        {% for entry in entries %}
++        {% if entry.metrics and key in entry.metrics %}
++        <div class="flex items-center gap-2">
++          <span class="text-xs text-slate-500 w-28 truncate">{{ entry.model_name }}</span>
++          <div class="flex-1 h-5 rounded bg-slate-100 overflow-hidden">
++            {% with val=entry.metrics|dictsort:key %}
++            <div class="h-full rounded bar-animate {% if entry.is_highlighted %}bg-accent{% else %}bg-slate-400{% endif %}"
++                 style="width: {% widthratio entry.metrics.key 1 100 %}%"></div>
++            {% endwith %}
++          </div>
++          <span class="text-xs text-slate-600 w-12 text-right">{{ entry.metrics|dictsort:key|first|last|default_if_none:"-" }}</span>
++        </div>
++        {% endif %}
++        {% endfor %}
++      </div>
++    </div>
++    {% endfor %}
++  </div>
++</div>
++{% endif %}
++
++<!-- Pipeline Details -->
++<div class="mt-8">
++  <h2 class="font-semibold text-accent-ink mb-4">Pipeline Details</h2>
++  <div class="space-y-3">
++    {% for entry in entries %}
++    <details class="bg-white rounded-xl border border-slate-200">
++      <summary class="p-4 cursor-pointer text-sm font-medium text-accent-ink hover:bg-slate-50 rounded-xl">
++        {{ entry.model_name }}
++        {% if entry.is_highlighted %}<span class="ml-2 text-amber-500">&#127942;</span>{% endif %}
++      </summary>
++      <div class="px-4 pb-4 text-sm text-slate-600">
++        {% if entry.pipeline_description %}
++        <p class="mb-2">{{ entry.pipeline_description|linebreaks }}</p>
++        {% endif %}
++        {% if entry.training_details %}
++        <div class="mt-2">
++          <p class="font-medium text-slate-700 mb-1">Training Details</p>
++          <dl class="grid grid-cols-2 gap-1 text-xs">
++            {% for k, v in entry.training_details.items %}
++            <div><dt class="text-slate-500">{{ k }}</dt><dd>{{ v }}</dd></div>
++            {% endfor %}
++          </dl>
++        </div>
++        {% endif %}
++        {% if entry.model %}
++        <a href="{{ entry.model.get_absolute_url }}" class="inline-block mt-3 text-accent text-sm hover:underline">Try this model &#8594;</a>
++        {% endif %}
++      </div>
++    </details>
++    {% endfor %}
++  </div>
++</div>
++
++{% if user == benchmark.researcher %}
++<div class="mt-6 no-print">
++  <a href="{% url 'algorithms:benchmark_edit' benchmark.slug %}" class="text-sm text-accent hover:underline">Edit Benchmark</a>
++</div>
++{% endif %}
++{% endblock %}
+diff --git a/templates/benchmarks/list.html b/templates/benchmarks/list.html
+new file mode 100644
+index 0000000..4649857
+--- /dev/null
++++ b/templates/benchmarks/list.html
+@@ -0,0 +1,43 @@
++{% extends "base.html" %}
++{% block title %}Benchmarks · MedAlgo Hub{% endblock %}
++{% block breadcrumb %}Benchmarks{% endblock %}
++
++{% block content %}
++<div class="flex items-center justify-between mb-1">
++  <h1 class="text-2xl font-semibold text-accent-ink">Benchmarks</h1>
++  {% if user.is_authenticated %}
++  <a href="{% url 'algorithms:benchmark_create' %}" class="px-4 py-2 rounded-lg bg-accent text-white text-sm hover:opacity-90">Create Benchmark</a>
++  {% endif %}
++</div>
++<p class="text-slate-500 mb-5">Compare models side by side on the same task and dataset.</p>
++
++<form hx-get="{% url 'algorithms:benchmark_list' %}"
++      hx-target="#benchmark-results"
++      hx-swap="innerHTML"
++      hx-trigger="keyup changed delay:300ms from:input, change from:select"
++      class="bg-white rounded-xl border border-slate-200 p-3 mb-5 flex flex-wrap gap-3 items-center">
++  <input type="search" name="q" value="{{ q }}" placeholder="Search benchmarks..."
++         class="flex-1 min-w-[200px] px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm">
++  <select name="modality" class="px-3 py-2 rounded-lg border border-slate-200 text-sm">
++    <option value="">All modalities</option>
++    {% for value, label in modalities %}
++      <option value="{{ value }}" {% if value == active_modality %}selected{% endif %}>{{ label }}</option>
++    {% endfor %}
++  </select>
++</form>
++
++<div id="benchmark-results">
++  <p class="text-xs text-slate-400 mb-3">{{ count }} benchmark{{ count|pluralize }}</p>
++  {% if benchmarks %}
++  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
++    {% for b in benchmarks %}
++    {% include "benchmarks/_benchmark_card.html" %}
++    {% endfor %}
++  </div>
++  {% else %}
++  <div class="text-center text-slate-400 py-16 border border-dashed border-slate-200 rounded-xl">
++    No benchmarks match your search.
++  </div>
++  {% endif %}
++</div>
++{% endblock %}
+diff --git a/templates/models/_inference_error.html b/templates/models/_inference_error.html
+new file mode 100644
+index 0000000..dea2701
+--- /dev/null
++++ b/templates/models/_inference_error.html
+@@ -0,0 +1,4 @@
++<div class="bg-rose-50 border border-rose-200 rounded-xl p-4 text-sm text-rose-700">
++  <p class="font-medium">Inference Error</p>
++  <p class="mt-1">{{ error }}</p>
++</div>
+diff --git a/templates/models/_inference_loading.html b/templates/models/_inference_loading.html
+new file mode 100644
+index 0000000..19ca54c
+--- /dev/null
++++ b/templates/models/_inference_loading.html
+@@ -0,0 +1,5 @@
++<div hx-get="{% url 'algorithms:run_status' run.pk %}" hx-trigger="every 1s" hx-swap="outerHTML"
++     class="flex items-center gap-3 text-accent p-4">
++  <svg class="animate-spin h-5 w-5" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>
++  <span class="text-sm">Running inference...</span>
++</div>
+diff --git a/templates/models/_inference_result.html b/templates/models/_inference_result.html
+new file mode 100644
+index 0000000..3bc4bae
+--- /dev/null
++++ b/templates/models/_inference_result.html
+@@ -0,0 +1,69 @@
++<!-- Disclaimer -->
++<div class="bg-amber-50 border border-amber-200 rounded-lg p-2 mb-4 text-xs text-amber-800">
++  Research use only. Not for clinical diagnosis.
++</div>
++
++<div class="bg-white rounded-xl border border-slate-200 p-5">
++  <div class="flex items-center justify-between mb-4">
++    <h3 class="font-semibold text-accent-ink">Inference Result</h3>
++    <span class="text-xs text-slate-400">{{ run.inference_time_ms }}ms · <a href="{% url 'algorithms:run_result' run.pk %}" class="text-accent hover:underline">Permalink</a></span>
++  </div>
++
++  {% if run.status == "completed" %}
++  <!-- Predicted Label -->
++  <div class="text-center mb-5">
++    <p class="text-3xl font-bold text-accent-ink">{{ run.result_label }}</p>
++    <div class="mt-2 inline-flex items-center gap-2">
++      <div class="w-48 h-3 rounded-full bg-slate-100 overflow-hidden">
++        <div class="h-full rounded-full {% if run.result_confidence >= 0.8 %}bg-emerald-500{% elif run.result_confidence >= 0.5 %}bg-amber-500{% else %}bg-rose-500{% endif %}"
++             style="width: {{ run.result_confidence|floatformat:0 }}%"></div>
++      </div>
++      <span class="text-sm font-medium {% if run.result_confidence >= 0.8 %}text-emerald-600{% elif run.result_confidence >= 0.5 %}text-amber-600{% else %}text-rose-600{% endif %}">
++        {% widthratio run.result_confidence 1 100 %}%
++      </span>
++    </div>
++  </div>
++
++  <!-- Probability Distribution -->
++  {% if run.result_probabilities %}
++  <div class="mb-5">
++    <h4 class="text-sm font-medium text-slate-600 mb-2">Probability Distribution</h4>
++    <div class="space-y-2">
++      {% for label, prob in run.result_probabilities.items %}
++      <div class="flex items-center gap-3">
++        <span class="text-sm text-slate-600 w-32 truncate">{{ label }}</span>
++        <div class="flex-1 h-5 rounded bg-slate-100 overflow-hidden">
++          <div class="h-full rounded {% if label == run.result_label %}bg-accent{% else %}bg-slate-300{% endif %} transition-all duration-500"
++               style="width: {% widthratio prob 1 100 %}%"></div>
++        </div>
++        <span class="text-xs text-slate-500 w-14 text-right">{% widthratio prob 1 100 %}%</span>
++      </div>
++      {% endfor %}
++    </div>
++  </div>
++  {% endif %}
++
++  <!-- GradCAM + Original side by side -->
++  {% if run.gradcam_image %}
++  <div class="mt-4">
++    <h4 class="text-sm font-medium text-slate-600 mb-2">GradCAM Visualization</h4>
++    <div class="grid grid-cols-2 gap-4">
++      <div>
++        <p class="text-xs text-slate-400 mb-1">Original</p>
++        <img src="{{ run.input_image.url }}" alt="Input" class="w-full rounded-lg border border-slate-200">
++      </div>
++      <div>
++        <p class="text-xs text-slate-400 mb-1">GradCAM Overlay</p>
++        <img src="{{ run.gradcam_image.url }}" alt="GradCAM" class="w-full rounded-lg border border-slate-200">
++      </div>
++    </div>
++  </div>
++  {% endif %}
++
++  {% elif run.status == "failed" %}
++  <div class="text-center py-4">
++    <p class="text-rose-600 font-medium">Inference failed</p>
++    <p class="text-sm text-slate-500 mt-1">{{ run.error_message }}</p>
++  </div>
++  {% endif %}
++</div>
+diff --git a/templates/models/_model_card.html b/templates/models/_model_card.html
+new file mode 100644
+index 0000000..5a7392b
+--- /dev/null
++++ b/templates/models/_model_card.html
+@@ -0,0 +1,18 @@
++<a href="{{ m.get_absolute_url }}"
++   class="block bg-white rounded-xl border border-slate-200 p-4 hover:border-accent hover:shadow-sm transition">
++  <div class="flex items-start justify-between gap-2">
++    <h3 class="font-semibold text-accent-ink leading-tight">{{ m.name }}</h3>
++    <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-accent/10 text-accent shrink-0">{{ m.get_modality_display }}</span>
++  </div>
++  <p class="text-xs text-slate-500 mt-0.5">
++    {{ m.get_architecture_display }} · {{ m.get_body_region_display }} · {{ m.num_classes }} classes
++  </p>
++  <p class="text-sm text-slate-600 mt-2 line-clamp-2">{{ m.clinical_task }}</p>
++  <div class="flex items-center gap-3 mt-3 text-xs text-slate-400 flex-wrap">
++    {% if m.reported_accuracy %}<span>Acc: {{ m.reported_accuracy|floatformat:1 }}%</span>{% endif %}
++    <span class="font-mono">{{ m.researcher.username }}</span>
++    {% if m.example_input %}
++    <span class="ml-auto px-2 py-0.5 rounded bg-emerald-50 text-emerald-600 text-[10px] uppercase">Demo</span>
++    {% endif %}
++  </div>
++</a>
+diff --git a/templates/models/_results_grid.html b/templates/models/_results_grid.html
+new file mode 100644
+index 0000000..ce07942
+--- /dev/null
++++ b/templates/models/_results_grid.html
+@@ -0,0 +1,14 @@
++<div id="results">
++  <p class="text-xs text-slate-400 mb-3">{{ count }} model{{ count|pluralize }}</p>
++  {% if models %}
++    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
++      {% for m in models %}
++        {% include "models/_model_card.html" %}
++      {% endfor %}
++    </div>
++  {% else %}
++    <div class="text-center text-slate-400 py-16 border border-dashed border-slate-200 rounded-xl">
++      No models match your search.
++    </div>
++  {% endif %}
++</div>
+diff --git a/templates/models/detail.html b/templates/models/detail.html
+new file mode 100644
+index 0000000..523ba6c
+--- /dev/null
++++ b/templates/models/detail.html
+@@ -0,0 +1,184 @@
++{% extends "base.html" %}
++{% block title %}{{ ml_model.name }} · MedAlgo Hub{% endblock %}
++{% block breadcrumb %}Model Hub / {{ ml_model.name }}{% endblock %}
++
++{% block content %}
++<!-- Disclaimer -->
++<div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-5 text-sm text-amber-800">
++  <strong>Research use only.</strong> Not for clinical diagnosis. Results have not been validated for medical decision-making.
++</div>
++
++<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
++  <!-- Main column -->
++  <div class="lg:col-span-2 space-y-6">
++    <!-- Header -->
++    <div>
++      <div class="flex items-center gap-2 flex-wrap">
++        <h1 class="text-2xl font-semibold text-accent-ink">{{ ml_model.name }}</h1>
++        <span class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-accent/10 text-accent">{{ ml_model.get_modality_display }}</span>
++        <span class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">{{ ml_model.get_architecture_display }}</span>
++        {% if ml_model.status == "published" %}
++        <span class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-600">Published</span>
++        {% elif ml_model.status == "in_review" %}
++        <span class="text-[10px] uppercase px-1.5 py-0.5 rounded bg-amber-50 text-amber-600">In Review</span>
++        {% endif %}
++      </div>
++      <p class="text-sm text-slate-500 mt-1">
++        {{ ml_model.get_body_region_display }} · {{ ml_model.clinical_task }} ·
++        by <span class="font-medium">{{ ml_model.researcher.username }}</span>
++        {% if ml_model.researcher.researcher_profile.institution %} ({{ ml_model.researcher.researcher_profile.institution }}){% endif %}
++      </p>
++    </div>
++
++    <!-- Description -->
++    {% if ml_model.description %}
++    <div class="bg-white rounded-xl border border-slate-200 p-5 prose prose-sm max-w-none">
++      {{ ml_model.description|linebreaks }}
++    </div>
++    {% endif %}
++
++    <!-- Try It Section -->
++    {% if ml_model.status == "published" %}
++    <div class="bg-gradient-to-br from-accent/5 to-blue-50 rounded-xl border-2 border-accent/20 p-6">
++      <h2 class="text-lg font-semibold text-accent-ink mb-3">Try It — Run Inference</h2>
++      <p class="text-sm text-slate-600 mb-4">Upload a medical image and get classification results instantly.</p>
++
++      <form hx-post="{% url 'algorithms:model_run' ml_model.slug %}"
++            hx-target="#inference-result"
++            hx-swap="innerHTML"
++            hx-indicator="#inference-spinner"
++            hx-encoding="multipart/form-data"
++            class="space-y-4">
++        {% csrf_token %}
++        <div class="relative">
++          <label class="block w-full border-2 border-dashed border-accent/30 rounded-xl p-8 text-center cursor-pointer hover:border-accent/60 hover:bg-white/50 transition" id="drop-zone">
++            <input type="file" name="image" accept="image/*,.dcm,.nii,.nii.gz" class="hidden" id="file-input"
++                   onchange="document.getElementById('file-name').textContent = this.files[0]?.name || 'No file selected'; document.getElementById('file-size').textContent = this.files[0] ? (this.files[0].size / 1024 / 1024).toFixed(2) + ' MB' : '';">
++            <div class="text-accent text-3xl mb-2">+</div>
++            <p class="text-sm text-slate-600">Drag & drop or click to upload</p>
++            <p class="text-xs text-slate-400 mt-1">JPEG, PNG, TIFF, BMP, DICOM, NIfTI</p>
++          </label>
++          <p class="text-sm mt-2"><span id="file-name" class="text-slate-600"></span> <span id="file-size" class="text-xs text-slate-400"></span></p>
++        </div>
++        <div class="flex gap-3">
++          <button type="submit" class="px-6 py-2.5 rounded-lg bg-accent text-white text-sm font-medium hover:opacity-90">
++            Run Inference
++          </button>
++          {% if ml_model.example_input %}
++          <button type="button"
++                  hx-post="{% url 'algorithms:model_demo' ml_model.slug %}"
++                  hx-target="#inference-result"
++                  hx-swap="innerHTML"
++                  hx-indicator="#inference-spinner"
++                  class="px-6 py-2.5 rounded-lg border border-accent text-accent text-sm font-medium hover:bg-accent/5">
++            Try Demo
++          </button>
++          {% endif %}
++        </div>
++      </form>
++
++      <div id="inference-spinner" class="htmx-indicator mt-4">
++        <div class="flex items-center gap-3 text-accent">
++          <svg class="animate-spin h-5 w-5" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"/></svg>
++          <span class="text-sm">Running inference...</span>
++        </div>
++      </div>
++
++      <div id="inference-result" class="mt-4"></div>
++    </div>
++    {% endif %}
++
++    <!-- Benchmarks featuring this model -->
++    {% if benchmarks %}
++    <div class="bg-white rounded-xl border border-slate-200 p-5">
++      <h2 class="font-semibold text-accent-ink mb-3">Featured in Benchmarks</h2>
++      <div class="space-y-2">
++        {% for be in benchmarks %}
++        <a href="{{ be.benchmark.get_absolute_url }}" class="block p-3 rounded-lg border border-slate-100 hover:border-accent transition text-sm">
++          <span class="font-medium text-accent-ink">{{ be.benchmark.name }}</span>
++          <span class="text-slate-400 ml-2">{{ be.benchmark.dataset_name }}</span>
++        </a>
++        {% endfor %}
++      </div>
++    </div>
++    {% endif %}
++  </div>
++
++  <!-- Sidebar -->
++  <div class="space-y-4">
++    <!-- Model Card -->
++    <div class="bg-white rounded-xl border border-slate-200 p-4">
++      <h3 class="text-sm font-semibold text-accent-ink mb-2">Model Card</h3>
++      <dl class="text-sm space-y-1.5">
++        <div class="flex justify-between"><dt class="text-slate-500">Architecture</dt><dd>{{ ml_model.get_architecture_display }}</dd></div>
++        <div class="flex justify-between"><dt class="text-slate-500">Classes</dt><dd>{{ ml_model.num_classes }}</dd></div>
++        <div class="flex justify-between"><dt class="text-slate-500">Input size</dt><dd>{{ ml_model.input_size }}x{{ ml_model.input_size }}</dd></div>
++        <div class="flex justify-between"><dt class="text-slate-500">Channels</dt><dd>{{ ml_model.input_channels }}</dd></div>
++        <div class="flex justify-between"><dt class="text-slate-500">Version</dt><dd>{{ ml_model.model_version }}</dd></div>
++        <div class="flex justify-between"><dt class="text-slate-500">GradCAM</dt><dd>{{ ml_model.gradcam_enabled|yesno:"Enabled,Disabled" }}</dd></div>
++      </dl>
++      <div class="mt-3 pt-3 border-t border-slate-100">
++        <p class="text-xs text-slate-500 font-medium mb-1">Class Labels</p>
++        <div class="flex flex-wrap gap-1">
++          {% for label in ml_model.class_labels %}
++          <span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">{{ label }}</span>
++          {% endfor %}
++        </div>
++      </div>
++    </div>
++
++    <!-- Reported Performance -->
++    {% if ml_model.reported_accuracy or ml_model.reported_auc or ml_model.reported_f1 %}
++    <div class="bg-white rounded-xl border border-slate-200 p-4">
++      <h3 class="text-sm font-semibold text-accent-ink mb-2">Reported Performance</h3>
++      <dl class="text-sm space-y-1.5">
++        {% if ml_model.reported_accuracy %}<div class="flex justify-between"><dt class="text-slate-500">Accuracy</dt><dd>{{ ml_model.reported_accuracy|floatformat:1 }}%</dd></div>{% endif %}
++        {% if ml_model.reported_auc %}<div class="flex justify-between"><dt class="text-slate-500">AUC</dt><dd>{{ ml_model.reported_auc|floatformat:3 }}</dd></div>{% endif %}
++        {% if ml_model.reported_f1 %}<div class="flex justify-between"><dt class="text-slate-500">F1</dt><dd>{{ ml_model.reported_f1|floatformat:3 }}</dd></div>{% endif %}
++        {% if ml_model.reported_dataset %}<div class="flex justify-between"><dt class="text-slate-500">Dataset</dt><dd class="text-right">{{ ml_model.reported_dataset }}</dd></div>{% endif %}
++        {% if ml_model.reported_dataset_size %}<div class="flex justify-between"><dt class="text-slate-500">Dataset size</dt><dd>{{ ml_model.reported_dataset_size }}</dd></div>{% endif %}
++      </dl>
++    </div>
++    {% endif %}
++
++    <!-- Download -->
++    {% if ml_model.model_file %}
++    <div class="bg-white rounded-xl border border-slate-200 p-4">
++      <h3 class="text-sm font-semibold text-accent-ink mb-2">Download</h3>
++      <a href="{{ ml_model.model_file.url }}" class="block text-sm text-accent hover:underline">Download .pt file</a>
++    </div>
++    {% endif %}
++
++    {% if ml_model.tags %}
++    <div class="bg-white rounded-xl border border-slate-200 p-4">
++      <h3 class="text-sm font-semibold text-accent-ink mb-2">Tags</h3>
++      <div class="flex flex-wrap gap-1">
++        {% for tag in ml_model.tags %}
++        <span class="text-xs px-2 py-0.5 rounded-full bg-accent/10 text-accent">{{ tag }}</span>
++        {% endfor %}
++      </div>
++    </div>
++    {% endif %}
++
++    {% if user == ml_model.researcher %}
++    <a href="{% url 'algorithms:model_edit' ml_model.slug %}" class="block text-center text-sm px-4 py-2 rounded-lg border border-slate-200 text-slate-500 hover:border-accent hover:text-accent transition">Edit Model</a>
++    {% endif %}
++  </div>
++</div>
++
++<script>
++const dropZone = document.getElementById('drop-zone');
++const fileInput = document.getElementById('file-input');
++if (dropZone) {
++  ['dragover','dragenter'].forEach(e => dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.add('border-accent'); }));
++  ['dragleave','drop'].forEach(e => dropZone.addEventListener(e, ev => { ev.preventDefault(); dropZone.classList.remove('border-accent'); }));
++  dropZone.addEventListener('drop', ev => {
++    if (ev.dataTransfer.files.length) {
++      fileInput.files = ev.dataTransfer.files;
++      document.getElementById('file-name').textContent = ev.dataTransfer.files[0].name;
++      document.getElementById('file-size').textContent = (ev.dataTransfer.files[0].size/1024/1024).toFixed(2)+' MB';
++    }
++  });
++}
++</script>
++{% endblock %}
+diff --git a/templates/models/list.html b/templates/models/list.html
+new file mode 100644
+index 0000000..99e4398
+--- /dev/null
++++ b/templates/models/list.html
+@@ -0,0 +1,44 @@
++{% extends "base.html" %}
++{% block title %}Model Hub · MedAlgo Hub{% endblock %}
++{% block breadcrumb %}Model Hub{% endblock %}
++
++{% block content %}
++<div class="flex items-center justify-between mb-1">
++  <h1 class="text-2xl font-semibold text-accent-ink">Model Hub</h1>
++  {% if user.is_authenticated %}
++  <a href="{% url 'algorithms:model_upload' %}" class="px-4 py-2 rounded-lg bg-accent text-white text-sm hover:opacity-90">Upload Model</a>
++  {% endif %}
++</div>
++<p class="text-slate-500 mb-5">Browse runnable ML models. Upload an image and get classification results instantly.</p>
++
++<form hx-get="{% url 'algorithms:model_list' %}"
++      hx-target="#results"
++      hx-swap="outerHTML"
++      hx-trigger="keyup changed delay:300ms from:input[name='q'], change from:select"
++      hx-push-url="true"
++      class="bg-white rounded-xl border border-slate-200 p-3 mb-5 flex flex-wrap gap-3 items-center">
++  <input type="search" name="q" value="{{ q }}" placeholder="Search models..."
++         class="flex-1 min-w-[200px] px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm">
++  <select name="modality" class="px-3 py-2 rounded-lg border border-slate-200 text-sm">
++    <option value="">All modalities</option>
++    {% for value, label in modalities %}
++      <option value="{{ value }}" {% if value == active_modality %}selected{% endif %}>{{ label }}</option>
++    {% endfor %}
++  </select>
++  <select name="body_region" class="px-3 py-2 rounded-lg border border-slate-200 text-sm">
++    <option value="">All regions</option>
++    {% for value, label in body_regions %}
++      <option value="{{ value }}" {% if value == active_body_region %}selected{% endif %}>{{ label }}</option>
++    {% endfor %}
++  </select>
++  <select name="architecture" class="px-3 py-2 rounded-lg border border-slate-200 text-sm">
++    <option value="">All architectures</option>
++    {% for value, label in architectures %}
++      <option value="{{ value }}" {% if value == active_architecture %}selected{% endif %}>{{ label }}</option>
++    {% endfor %}
++  </select>
++  <span class="htmx-indicator text-xs text-slate-400">searching...</span>
++</form>
++
++{% include "models/_results_grid.html" %}
++{% endblock %}
+diff --git a/templates/models/run_detail.html b/templates/models/run_detail.html
+new file mode 100644
+index 0000000..f809346
+--- /dev/null
++++ b/templates/models/run_detail.html
+@@ -0,0 +1,27 @@
++{% extends "base.html" %}
++{% block title %}Run #{{ run.pk }} · MedAlgo Hub{% endblock %}
++{% block breadcrumb %}Model Hub / {{ ml_model.name }} / Run #{{ run.pk }}{% endblock %}
++
++{% block content %}
++<div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-5 text-sm text-amber-800">
++  <strong>Research use only.</strong> Not for clinical diagnosis. Results have not been validated for medical decision-making.
++</div>
++
++<div class="max-w-3xl">
++  <div class="flex items-center justify-between mb-4">
++    <h1 class="text-xl font-semibold text-accent-ink">Inference Run #{{ run.pk }}</h1>
++    <a href="{{ ml_model.get_absolute_url }}" class="text-sm text-accent hover:underline">Back to {{ ml_model.name }}</a>
++  </div>
++
++  <div class="bg-white rounded-xl border border-slate-200 p-4 mb-4 text-sm">
++    <dl class="grid grid-cols-2 gap-2">
++      <div><dt class="text-slate-500">Model</dt><dd class="font-medium">{{ ml_model.name }}</dd></div>
++      <div><dt class="text-slate-500">Status</dt><dd>{{ run.get_status_display }}</dd></div>
++      <div><dt class="text-slate-500">Date</dt><dd>{{ run.created_at }}</dd></div>
++      <div><dt class="text-slate-500">Inference Time</dt><dd>{{ run.inference_time_ms|default_if_none:"-" }}ms</dd></div>
++    </dl>
++  </div>
++
++  {% include "models/_inference_result.html" %}
++</div>
++{% endblock %}
+diff --git a/templates/models/upload.html b/templates/models/upload.html
+new file mode 100644
+index 0000000..4206e0d
+--- /dev/null
++++ b/templates/models/upload.html
+@@ -0,0 +1,227 @@
++{% extends "base.html" %}
++{% block title %}{% if editing %}Edit Model{% else %}Upload Model{% endif %} · MedAlgo Hub{% endblock %}
++{% block breadcrumb %}Model Hub / {% if editing %}Edit{% else %}Upload{% endif %}{% endblock %}
++
++{% block content %}
++<h1 class="text-2xl font-semibold text-accent-ink mb-1">{% if editing %}Edit Model{% else %}Upload a Model{% endif %}</h1>
++<p class="text-slate-500 mb-5">{% if editing %}Update your model's metadata and files.{% else %}Share your trained PyTorch model with the community.{% endif %}</p>
++
++{% if error %}
++<div class="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-5 text-sm text-rose-700">{{ error }}</div>
++{% endif %}
++
++{% if form %}
++<form method="post" enctype="multipart/form-data" class="space-y-6 max-w-3xl">
++  {% csrf_token %}
++
++  {% if form.errors %}
++  <div class="bg-rose-50 border border-rose-200 rounded-xl p-4 text-sm text-rose-700">
++    <p class="font-medium mb-2">Please correct the errors below:</p>
++    {{ form.errors }}
++  </div>
++  {% endif %}
++
++  <!-- Step 1: Basic Info -->
++  <div class="bg-white rounded-xl border border-slate-200 p-5">
++    <h2 class="font-semibold text-accent-ink mb-4">1. Basic Information</h2>
++    <div class="space-y-4">
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Model Name</label>
++        <input type="text" name="name" value="{{ form.name.value|default_if_none:'' }}" required
++               class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm"
++               placeholder="e.g. Stroke CT Classifier - ResNet18">
++      </div>
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Description</label>
++        <textarea name="description" rows="4"
++                  class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm"
++                  placeholder="Describe your model, its purpose, and training approach...">{{ form.description.value|default_if_none:'' }}</textarea>
++      </div>
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Clinical Task</label>
++        <input type="text" name="clinical_task" value="{{ form.clinical_task.value|default_if_none:'' }}" required
++               class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm"
++               placeholder="e.g. Ischemic stroke detection">
++      </div>
++      <div class="grid grid-cols-2 gap-4">
++        <div>
++          <label class="block text-sm font-medium text-slate-700 mb-1">Modality</label>
++          <select name="modality" required class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++            {% for value, label in form.modality.field.choices %}
++            <option value="{{ value }}" {% if form.modality.value == value %}selected{% endif %}>{{ label }}</option>
++            {% endfor %}
++          </select>
++        </div>
++        <div>
++          <label class="block text-sm font-medium text-slate-700 mb-1">Body Region</label>
++          <select name="body_region" required class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++            {% for value, label in form.body_region.field.choices %}
++            <option value="{{ value }}" {% if form.body_region.value == value %}selected{% endif %}>{{ label }}</option>
++            {% endfor %}
++          </select>
++        </div>
++      </div>
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Tags</label>
++        <input type="text" name="tags" value="{{ form.tags.value|default_if_none:'' }}"
++               class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm"
++               placeholder="stroke, ct, brain (comma-separated)">
++      </div>
++    </div>
++  </div>
++
++  <!-- Step 2: Architecture -->
++  <div class="bg-white rounded-xl border border-slate-200 p-5">
++    <h2 class="font-semibold text-accent-ink mb-4">2. Architecture</h2>
++    <div class="space-y-4">
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Architecture</label>
++        <select name="architecture" required class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
++                onchange="document.getElementById('custom-code').style.display = this.value === 'custom' ? 'block' : 'none'">
++          {% for value, label in form.architecture.field.choices %}
++          <option value="{{ value }}" {% if form.architecture.value == value %}selected{% endif %}>{{ label }}</option>
++          {% endfor %}
++        </select>
++      </div>
++      <div id="custom-code" style="display: {% if form.architecture.value == 'custom' %}block{% else %}none{% endif %}">
++        <label class="block text-sm font-medium text-slate-700 mb-1">Custom Architecture Code</label>
++        <p class="text-xs text-slate-400 mb-2">Must define: <code>def build_model(num_classes: int) -> torch.nn.Module</code></p>
++        <textarea name="custom_architecture_code" rows="10"
++                  class="w-full px-3 py-2 rounded-lg border border-slate-200 font-mono text-sm">{{ form.custom_architecture_code.value|default_if_none:'' }}</textarea>
++      </div>
++      <div class="grid grid-cols-3 gap-4">
++        <div>
++          <label class="block text-sm font-medium text-slate-700 mb-1">Number of Classes</label>
++          <input type="number" name="num_classes" value="{{ form.num_classes.value|default_if_none:'2' }}" required min="2"
++                 class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++        </div>
++        <div>
++          <label class="block text-sm font-medium text-slate-700 mb-1">Input Size (px)</label>
++          <input type="number" name="input_size" value="{{ form.input_size.value|default_if_none:'224' }}" required
++                 class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++        </div>
++        <div>
++          <label class="block text-sm font-medium text-slate-700 mb-1">Input Channels</label>
++          <input type="number" name="input_channels" value="{{ form.input_channels.value|default_if_none:'3' }}" required
++                 class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++        </div>
++      </div>
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Class Labels</label>
++        <input type="text" name="class_labels" value="{{ form.class_labels.value|default_if_none:'' }}" required
++               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
++               placeholder="Normal, Stroke (comma-separated, must match number of classes)">
++      </div>
++    </div>
++  </div>
++
++  <!-- Step 3: Preprocessing -->
++  <div class="bg-white rounded-xl border border-slate-200 p-5">
++    <h2 class="font-semibold text-accent-ink mb-4">3. Preprocessing</h2>
++    <div class="space-y-4">
++      <div class="grid grid-cols-2 gap-4">
++        <div>
++          <label class="block text-sm font-medium text-slate-700 mb-1">Normalization Mean</label>
++          <input type="text" name="preprocessing_mean" value="{{ form.preprocessing_mean.value|default_if_none:'0.485, 0.456, 0.406' }}"
++                 class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++        </div>
++        <div>
++          <label class="block text-sm font-medium text-slate-700 mb-1">Normalization Std</label>
++          <input type="text" name="preprocessing_std" value="{{ form.preprocessing_std.value|default_if_none:'0.229, 0.224, 0.225' }}"
++                 class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++        </div>
++      </div>
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Preprocessing Notes</label>
++        <textarea name="preprocessing_notes" rows="3"
++                  class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
++                  placeholder="Any special instructions (e.g. DICOM windowing parameters)">{{ form.preprocessing_notes.value|default_if_none:'' }}</textarea>
++      </div>
++    </div>
++  </div>
++
++  <!-- Step 4: Upload -->
++  <div class="bg-white rounded-xl border border-slate-200 p-5">
++    <h2 class="font-semibold text-accent-ink mb-4">4. Model File</h2>
++    <div class="space-y-4">
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">PyTorch Model File (.pt / .pth)</label>
++        <input type="file" name="model_file" accept=".pt,.pth" {% if not editing %}required{% endif %}
++               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++        <p class="text-xs text-slate-400 mt-1">Max 500 MB. State dict or full model.</p>
++      </div>
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Model Version</label>
++        <input type="text" name="model_version" value="{{ form.model_version.value|default_if_none:'1.0.0' }}"
++               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" placeholder="1.0.0">
++      </div>
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Example Input Image (optional)</label>
++        <input type="file" name="example_input" accept="image/*"
++               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++        <p class="text-xs text-slate-400 mt-1">A sample image users can try with one click.</p>
++      </div>
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Expected Label for Example</label>
++        <input type="text" name="example_expected_label" value="{{ form.example_expected_label.value|default_if_none:'' }}"
++               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" placeholder="e.g. Normal">
++      </div>
++    </div>
++  </div>
++
++  <!-- Step 5: Performance -->
++  <div class="bg-white rounded-xl border border-slate-200 p-5">
++    <h2 class="font-semibold text-accent-ink mb-4">5. Reported Performance (optional)</h2>
++    <div class="grid grid-cols-3 gap-4">
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Accuracy (%)</label>
++        <input type="number" step="0.1" name="reported_accuracy" value="{{ form.reported_accuracy.value|default_if_none:'' }}"
++               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++      </div>
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">AUC</label>
++        <input type="number" step="0.001" name="reported_auc" value="{{ form.reported_auc.value|default_if_none:'' }}"
++               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++      </div>
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">F1</label>
++        <input type="number" step="0.001" name="reported_f1" value="{{ form.reported_f1.value|default_if_none:'' }}"
++               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++      </div>
++    </div>
++    <div class="grid grid-cols-2 gap-4 mt-4">
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Dataset Name</label>
++        <input type="text" name="reported_dataset" value="{{ form.reported_dataset.value|default_if_none:'' }}"
++               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" placeholder="e.g. CQ500">
++      </div>
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">Dataset Size</label>
++        <input type="number" name="reported_dataset_size" value="{{ form.reported_dataset_size.value|default_if_none:'' }}"
++               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
++      </div>
++    </div>
++  </div>
++
++  <!-- Step 6: Explainability -->
++  <div class="bg-white rounded-xl border border-slate-200 p-5">
++    <h2 class="font-semibold text-accent-ink mb-4">6. Explainability</h2>
++    <div class="space-y-4">
++      <label class="flex items-center gap-2 text-sm">
++        <input type="checkbox" name="gradcam_enabled" {% if form.gradcam_enabled.value != False %}checked{% endif %} class="rounded">
++        Enable GradCAM visualization
++      </label>
++      <div>
++        <label class="block text-sm font-medium text-slate-700 mb-1">GradCAM Target Layer (optional)</label>
++        <input type="text" name="gradcam_target_layer" value="{{ form.gradcam_target_layer.value|default_if_none:'' }}"
++               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" placeholder="e.g. layer4">
++      </div>
++    </div>
++  </div>
++
++  <button type="submit" class="px-6 py-3 rounded-lg bg-accent text-white font-medium hover:opacity-90">
++    {% if editing %}Save Changes{% else %}Submit for Review{% endif %}
++  </button>
++</form>
++{% endif %}
++{% endblock %}
+diff --git a/templates/models/upload_success.html b/templates/models/upload_success.html
+new file mode 100644
+index 0000000..2a1db10
+--- /dev/null
++++ b/templates/models/upload_success.html
+@@ -0,0 +1,20 @@
++{% extends "base.html" %}
++{% block title %}Upload Successful · MedAlgo Hub{% endblock %}
++{% block breadcrumb %}Model Hub / Upload{% endblock %}
++
++{% block content %}
++<div class="max-w-lg mx-auto text-center py-16">
++  <div class="w-16 h-16 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto mb-4 text-2xl">
++    &#10003;
++  </div>
++  <h1 class="text-2xl font-semibold text-accent-ink mb-2">Model Submitted</h1>
++  <p class="text-slate-500 mb-6">
++    <strong>{{ ml_model.name }}</strong> has been submitted for review.
++    An admin will review and publish it shortly.
++  </p>
++  <div class="flex gap-3 justify-center">
++    <a href="{% url 'algorithms:model_detail' ml_model.slug %}" class="px-4 py-2 rounded-lg bg-accent text-white text-sm hover:opacity-90">View Model</a>
++    <a href="{% url 'algorithms:model_upload' %}" class="px-4 py-2 rounded-lg border border-slate-200 text-slate-600 text-sm hover:border-accent">Upload Another</a>
++  </div>
++</div>
++{% endblock %}
+diff --git a/templates/registration/login.html b/templates/registration/login.html
+new file mode 100644
+index 0000000..12e936b
+--- /dev/null
++++ b/templates/registration/login.html
+@@ -0,0 +1,34 @@
++{% extends "base.html" %}
++{% block title %}Sign In · MedAlgo Hub{% endblock %}
++{% block breadcrumb %}Sign In{% endblock %}
++
++{% block content %}
++<div class="max-w-md mx-auto py-8">
++  <h1 class="text-2xl font-semibold text-accent-ink mb-6 text-center">Sign In</h1>
++
++  {% if form.errors %}
++  <div class="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-5 text-sm text-rose-700">
++    Invalid username or password. Please try again.
++  </div>
++  {% endif %}
++
++  <form method="post" class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
++    {% csrf_token %}
++    <div>
++      <label class="block text-sm font-medium text-slate-700 mb-1">Username</label>
++      <input type="text" name="username" autofocus required
++             class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm">
++    </div>
++    <div>
++      <label class="block text-sm font-medium text-slate-700 mb-1">Password</label>
++      <input type="password" name="password" required
++             class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm">
++    </div>
++    <button type="submit" class="w-full px-4 py-2.5 rounded-lg bg-accent text-white font-medium hover:opacity-90">Sign In</button>
++  </form>
++
++  <p class="text-center text-sm text-slate-500 mt-4">
++    Don't have an account? <a href="{% url 'register' %}" class="text-accent hover:underline">Register</a>
++  </p>
++</div>
++{% endblock %}
+diff --git a/templates/registration/register.html b/templates/registration/register.html
+new file mode 100644
+index 0000000..8fcb470
+--- /dev/null
++++ b/templates/registration/register.html
+@@ -0,0 +1,66 @@
++{% extends "base.html" %}
++{% block title %}Register · MedAlgo Hub{% endblock %}
++{% block breadcrumb %}Register{% endblock %}
++
++{% block content %}
++<div class="max-w-md mx-auto py-8">
++  <h1 class="text-2xl font-semibold text-accent-ink mb-6 text-center">Create Account</h1>
++
++  {% if form.errors %}
++  <div class="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-5 text-sm text-rose-700">
++    <ul class="list-disc list-inside">
++      {% for field, errors in form.errors.items %}
++        {% for error in errors %}<li>{{ error }}</li>{% endfor %}
++      {% endfor %}
++    </ul>
++  </div>
++  {% endif %}
++
++  <form method="post" class="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
++    {% csrf_token %}
++    <div>
++      <label class="block text-sm font-medium text-slate-700 mb-1">Username</label>
++      <input type="text" name="username" value="{{ form.username.value|default_if_none:'' }}" required
++             class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm">
++    </div>
++    <div>
++      <label class="block text-sm font-medium text-slate-700 mb-1">Email</label>
++      <input type="email" name="email" value="{{ form.email.value|default_if_none:'' }}" required
++             class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm">
++    </div>
++    <div>
++      <label class="block text-sm font-medium text-slate-700 mb-1">Institution</label>
++      <input type="text" name="institution" value="{{ form.institution.value|default_if_none:'' }}" required
++             class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm"
++             placeholder="e.g. Johns Hopkins University">
++    </div>
++    <div>
++      <label class="block text-sm font-medium text-slate-700 mb-1">ORCID (optional)</label>
++      <input type="text" name="orcid" value="{{ form.orcid.value|default_if_none:'' }}"
++             class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm"
++             placeholder="0000-0000-0000-0000">
++    </div>
++    <div>
++      <label class="block text-sm font-medium text-slate-700 mb-1">Bio (optional)</label>
++      <textarea name="bio" rows="3"
++                class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm">{{ form.bio.value|default_if_none:'' }}</textarea>
++    </div>
++    <div>
++      <label class="block text-sm font-medium text-slate-700 mb-1">Password</label>
++      <input type="password" name="password1" required
++             class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm">
++    </div>
++    <div>
++      <label class="block text-sm font-medium text-slate-700 mb-1">Confirm Password</label>
++      <input type="password" name="password2" required
++             class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm">
++    </div>
++    <button type="submit" class="w-full px-4 py-2.5 rounded-lg bg-accent text-white font-medium hover:opacity-90">Register</button>
++    <p class="text-xs text-slate-400 text-center">Your profile will require admin approval before you can upload models.</p>
++  </form>
++
++  <p class="text-center text-sm text-slate-500 mt-4">
++    Already have an account? <a href="{% url 'login' %}" class="text-accent hover:underline">Sign In</a>
++  </p>
++</div>
++{% endblock %}
+-- 
+2.43.0
+

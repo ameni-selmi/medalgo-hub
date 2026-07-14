@@ -1,0 +1,14 @@
+<div id="results">
+  <p class="text-xs text-slate-400 mb-3">{{ count }} model{{ count|pluralize }}</p>
+  {% if models %}
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {% for m in models %}
+        {% include "models/_model_card.html" %}
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="text-center text-slate-400 py-16 border border-dashed border-slate-200 rounded-xl">
+      No models match your search.
+    </div>
+  {% endif %}
+</div>

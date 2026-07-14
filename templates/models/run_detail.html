@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Run #{{ run.pk }} · MedAlgo Hub{% endblock %}
+{% block breadcrumb %}Model Hub / {{ ml_model.name }} / Run #{{ run.pk }}{% endblock %}
+
+{% block content %}
+<div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-5 text-sm text-amber-800">
+  <strong>Research use only.</strong> Not for clinical diagnosis. Results have not been validated for medical decision-making.
+</div>
+
+<div class="max-w-3xl">
+  <div class="flex items-center justify-between mb-4">
+    <h1 class="text-xl font-semibold text-accent-ink">Inference Run #{{ run.pk }}</h1>
+    <a href="{{ ml_model.get_absolute_url }}" class="text-sm text-accent hover:underline">Back to {{ ml_model.name }}</a>
+  </div>
+
+  <div class="bg-white rounded-xl border border-slate-200 p-4 mb-4 text-sm">
+    <dl class="grid grid-cols-2 gap-2">
+      <div><dt class="text-slate-500">Model</dt><dd class="font-medium">{{ ml_model.name }}</dd></div>
+      <div><dt class="text-slate-500">Status</dt><dd>{{ run.get_status_display }}</dd></div>
+      <div><dt class="text-slate-500">Date</dt><dd>{{ run.created_at }}</dd></div>
+      <div><dt class="text-slate-500">Inference Time</dt><dd>{{ run.inference_time_ms|default_if_none:"-" }}ms</dd></div>
+    </dl>
+  </div>
+
+  {% include "models/_inference_result.html" %}
+</div>
+{% endblock %}

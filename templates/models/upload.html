@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block title %}{% if editing %}Edit Model{% else %}Upload Model{% endif %} · MedAlgo Hub{% endblock %}
+{% block breadcrumb %}Model Hub / {% if editing %}Edit{% else %}Upload{% endif %}{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-semibold text-accent-ink mb-1">{% if editing %}Edit Model{% else %}Upload a Model{% endif %}</h1>
+<p class="text-slate-500 mb-5">{% if editing %}Update your model's metadata and files.{% else %}Share your trained PyTorch model with the community.{% endif %}</p>
+
+{% if error %}
+<div class="bg-rose-50 border border-rose-200 rounded-xl p-4 mb-5 text-sm text-rose-700">{{ error }}</div>
+{% endif %}
+
+{% if form %}
+<form method="post" enctype="multipart/form-data" class="space-y-6 max-w-3xl">
+  {% csrf_token %}
+
+  {% if form.errors %}
+  <div class="bg-rose-50 border border-rose-200 rounded-xl p-4 text-sm text-rose-700">
+    <p class="font-medium mb-2">Please correct the errors below:</p>
+    {{ form.errors }}
+  </div>
+  {% endif %}
+
+  <!-- Step 1: Basic Info -->
+  <div class="bg-white rounded-xl border border-slate-200 p-5">
+    <h2 class="font-semibold text-accent-ink mb-4">1. Basic Information</h2>
+    <div class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Model Name</label>
+        <input type="text" name="name" value="{{ form.name.value|default_if_none:'' }}" required
+               class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm"
+               placeholder="e.g. Stroke CT Classifier - ResNet18">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Description</label>
+        <textarea name="description" rows="4"
+                  class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm"
+                  placeholder="Describe your model, its purpose, and training approach...">{{ form.description.value|default_if_none:'' }}</textarea>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Clinical Task</label>
+        <input type="text" name="clinical_task" value="{{ form.clinical_task.value|default_if_none:'' }}" required
+               class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm"
+               placeholder="e.g. Ischemic stroke detection">
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Modality</label>
+          <select name="modality" required class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+            {% for value, label in form.modality.field.choices %}
+            <option value="{{ value }}" {% if form.modality.value == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Body Region</label>
+          <select name="body_region" required class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+            {% for value, label in form.body_region.field.choices %}
+            <option value="{{ value }}" {% if form.body_region.value == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Tags</label>
+        <input type="text" name="tags" value="{{ form.tags.value|default_if_none:'' }}"
+               class="w-full px-3 py-2 rounded-lg border border-slate-200 focus:border-accent outline-none text-sm"
+               placeholder="stroke, ct, brain (comma-separated)">
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 2: Architecture -->
+  <div class="bg-white rounded-xl border border-slate-200 p-5">
+    <h2 class="font-semibold text-accent-ink mb-4">2. Architecture</h2>
+    <div class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Architecture</label>
+        <select name="architecture" required class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                onchange="document.getElementById('custom-code').style.display = this.value === 'custom' ? 'block' : 'none'">
+          {% for value, label in form.architecture.field.choices %}
+          <option value="{{ value }}" {% if form.architecture.value == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div id="custom-code" style="display: {% if form.architecture.value == 'custom' %}block{% else %}none{% endif %}">
+        <label class="block text-sm font-medium text-slate-700 mb-1">Custom Architecture Code</label>
+        <p class="text-xs text-slate-400 mb-2">Must define: <code>def build_model(num_classes: int) -> torch.nn.Module</code></p>
+        <textarea name="custom_architecture_code" rows="10"
+                  class="w-full px-3 py-2 rounded-lg border border-slate-200 font-mono text-sm">{{ form.custom_architecture_code.value|default_if_none:'' }}</textarea>
+      </div>
+      <div class="grid grid-cols-3 gap-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Number of Classes</label>
+          <input type="number" name="num_classes" value="{{ form.num_classes.value|default_if_none:'2' }}" required min="2"
+                 class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Input Size (px)</label>
+          <input type="number" name="input_size" value="{{ form.input_size.value|default_if_none:'224' }}" required
+                 class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Input Channels</label>
+          <input type="number" name="input_channels" value="{{ form.input_channels.value|default_if_none:'3' }}" required
+                 class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+        </div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Class Labels</label>
+        <input type="text" name="class_labels" value="{{ form.class_labels.value|default_if_none:'' }}" required
+               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+               placeholder="Normal, Stroke (comma-separated, must match number of classes)">
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 3: Preprocessing -->
+  <div class="bg-white rounded-xl border border-slate-200 p-5">
+    <h2 class="font-semibold text-accent-ink mb-4">3. Preprocessing</h2>
+    <div class="space-y-4">
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Normalization Mean</label>
+          <input type="text" name="preprocessing_mean" value="{{ form.preprocessing_mean.value|default_if_none:'0.485, 0.456, 0.406' }}"
+                 class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Normalization Std</label>
+          <input type="text" name="preprocessing_std" value="{{ form.preprocessing_std.value|default_if_none:'0.229, 0.224, 0.225' }}"
+                 class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+        </div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Preprocessing Notes</label>
+        <textarea name="preprocessing_notes" rows="3"
+                  class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm"
+                  placeholder="Any special instructions (e.g. DICOM windowing parameters)">{{ form.preprocessing_notes.value|default_if_none:'' }}</textarea>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 4: Upload -->
+  <div class="bg-white rounded-xl border border-slate-200 p-5">
+    <h2 class="font-semibold text-accent-ink mb-4">4. Model File</h2>
+    <div class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">PyTorch Model File (.pt / .pth)</label>
+        <input type="file" name="model_file" accept=".pt,.pth" {% if not editing %}required{% endif %}
+               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+        <p class="text-xs text-slate-400 mt-1">Max 500 MB. State dict or full model.</p>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Model Version</label>
+        <input type="text" name="model_version" value="{{ form.model_version.value|default_if_none:'1.0.0' }}"
+               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" placeholder="1.0.0">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Example Input Image (optional)</label>
+        <input type="file" name="example_input" accept="image/*"
+               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+        <p class="text-xs text-slate-400 mt-1">A sample image users can try with one click.</p>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Expected Label for Example</label>
+        <input type="text" name="example_expected_label" value="{{ form.example_expected_label.value|default_if_none:'' }}"
+               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" placeholder="e.g. Normal">
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 5: Performance -->
+  <div class="bg-white rounded-xl border border-slate-200 p-5">
+    <h2 class="font-semibold text-accent-ink mb-4">5. Reported Performance (optional)</h2>
+    <div class="grid grid-cols-3 gap-4">
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Accuracy (%)</label>
+        <input type="number" step="0.1" name="reported_accuracy" value="{{ form.reported_accuracy.value|default_if_none:'' }}"
+               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">AUC</label>
+        <input type="number" step="0.001" name="reported_auc" value="{{ form.reported_auc.value|default_if_none:'' }}"
+               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">F1</label>
+        <input type="number" step="0.001" name="reported_f1" value="{{ form.reported_f1.value|default_if_none:'' }}"
+               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+      </div>
+    </div>
+    <div class="grid grid-cols-2 gap-4 mt-4">
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Dataset Name</label>
+        <input type="text" name="reported_dataset" value="{{ form.reported_dataset.value|default_if_none:'' }}"
+               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" placeholder="e.g. CQ500">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Dataset Size</label>
+        <input type="number" name="reported_dataset_size" value="{{ form.reported_dataset_size.value|default_if_none:'' }}"
+               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm">
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 6: Explainability -->
+  <div class="bg-white rounded-xl border border-slate-200 p-5">
+    <h2 class="font-semibold text-accent-ink mb-4">6. Explainability</h2>
+    <div class="space-y-4">
+      <label class="flex items-center gap-2 text-sm">
+        <input type="checkbox" name="gradcam_enabled" {% if form.gradcam_enabled.value != False %}checked{% endif %} class="rounded">
+        Enable GradCAM visualization
+      </label>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">GradCAM Target Layer (optional)</label>
+        <input type="text" name="gradcam_target_layer" value="{{ form.gradcam_target_layer.value|default_if_none:'' }}"
+               class="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm" placeholder="e.g. layer4">
+      </div>
+    </div>
+  </div>
+
+  <button type="submit" class="px-6 py-3 rounded-lg bg-accent text-white font-medium hover:opacity-90">
+    {% if editing %}Save Changes{% else %}Submit for Review{% endif %}
+  </button>
+</form>
+{% endif %}
+{% endblock %}
