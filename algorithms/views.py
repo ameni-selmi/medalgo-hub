@@ -60,9 +60,17 @@ def detail(request, slug):
         Algorithm.objects.select_related("category", "owner").prefetch_related("versions"),
         slug=slug,
     )
+    related_models = MLModel.objects.filter(
+        status=MLModel.Status.PUBLISHED, is_public=True
+    ).filter(
+        Q(clinical_task__icontains=algorithm.name.split()[0]) |
+        Q(modality__in=["ct", "mri", "xray"]) & Q(tags__icontains=algorithm.name.split()[0].lower())
+    )[:3] if algorithm.field == "medical" else MLModel.objects.none()
+
     context = {
         "algorithm": algorithm,
         "versions": algorithm.versions.all(),
         "current": algorithm.current_version,
+        "related_models": related_models,
     }
     return render(request, "algorithms/detail.html", context)

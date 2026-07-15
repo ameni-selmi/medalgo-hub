@@ -16,7 +16,7 @@
     <div class="mt-2 inline-flex items-center gap-2">
       <div class="w-48 h-3 rounded-full bg-slate-100 overflow-hidden">
         <div class="h-full rounded-full {% if run.result_confidence >= 0.8 %}bg-emerald-500{% elif run.result_confidence >= 0.5 %}bg-amber-500{% else %}bg-rose-500{% endif %}"
-             style="width: {{ run.result_confidence|floatformat:0 }}%"></div>
+             style="width: {% widthratio run.result_confidence 1 100 %}%"></div>
       </div>
       <span class="text-sm font-medium {% if run.result_confidence >= 0.8 %}text-emerald-600{% elif run.result_confidence >= 0.5 %}text-amber-600{% else %}text-rose-600{% endif %}">
         {% widthratio run.result_confidence 1 100 %}%

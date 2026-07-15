@@ -27,13 +27,9 @@
             {{ entry.model_name }}
             {% if entry.is_highlighted %}<span class="ml-1 text-amber-500">&#127942;</span>{% endif %}
           </td>
-          {% for key in metric_keys %}
-          <td class="text-right px-4 py-3 {% if entry.metrics and best_values|dictsort:key and entry.metrics.key == best_values.key %}text-emerald-600 font-semibold{% endif %}">
-            {% if entry.metrics %}
-              {% for mk, mv in entry.metrics.items %}
-                {% if mk == key %}{{ mv }}{% endif %}
-              {% endfor %}
-            {% else %}-{% endif %}
+          {% for cell in entry.metric_cells %}
+          <td class="text-right px-4 py-3 {% if cell.is_best %}text-emerald-600 font-semibold bg-emerald-50/50{% endif %}">
+            {% if cell.value != None %}{{ cell.value }}{% else %}-{% endif %}
           </td>
           {% endfor %}
           <td class="px-4 py-3">
