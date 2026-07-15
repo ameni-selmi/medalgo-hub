@@ -50,18 +50,18 @@
       <h3 class="text-sm font-medium text-slate-600 mb-3 capitalize">{{ key }}</h3>
       <div class="space-y-2">
         {% for entry in entries %}
-        {% if entry.metrics and key in entry.metrics %}
+        {% for cell in entry.metric_cells %}
+        {% if cell.key == key and cell.value != None %}
         <div class="flex items-center gap-2">
           <span class="text-xs text-slate-500 w-28 truncate">{{ entry.model_name }}</span>
           <div class="flex-1 h-5 rounded bg-slate-100 overflow-hidden">
-            {% with val=entry.metrics|dictsort:key %}
             <div class="h-full rounded bar-animate {% if entry.is_highlighted %}bg-accent{% else %}bg-slate-400{% endif %}"
-                 style="width: {% widthratio entry.metrics.key 1 100 %}%"></div>
-            {% endwith %}
+                 style="width: {{ cell.bar_pct }}%"></div>
           </div>
-          <span class="text-xs text-slate-600 w-12 text-right">{{ entry.metrics|dictsort:key|first|last|default_if_none:"-" }}</span>
+          <span class="text-xs text-slate-600 w-12 text-right">{{ cell.value }}</span>
         </div>
         {% endif %}
+        {% endfor %}
         {% endfor %}
       </div>
     </div>
