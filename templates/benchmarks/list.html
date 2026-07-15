@@ -13,7 +13,7 @@
 
 <form hx-get="{% url 'algorithms:benchmark_list' %}"
       hx-target="#benchmark-results"
-      hx-swap="innerHTML"
+      hx-swap="outerHTML"
       hx-trigger="keyup changed delay:300ms from:input, change from:select"
       class="bg-white rounded-xl border border-slate-200 p-3 mb-5 flex flex-wrap gap-3 items-center">
   <input type="search" name="q" value="{{ q }}" placeholder="Search benchmarks..."
@@ -26,18 +26,5 @@
   </select>
 </form>
 
-<div id="benchmark-results">
-  <p class="text-xs text-slate-400 mb-3">{{ count }} benchmark{{ count|pluralize }}</p>
-  {% if benchmarks %}
-  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-    {% for b in benchmarks %}
-    {% include "benchmarks/_benchmark_card.html" %}
-    {% endfor %}
-  </div>
-  {% else %}
-  <div class="text-center text-slate-400 py-16 border border-dashed border-slate-200 rounded-xl">
-    No benchmarks match your search.
-  </div>
-  {% endif %}
-</div>
+{% include "benchmarks/_results_grid.html" %}
 {% endblock %}

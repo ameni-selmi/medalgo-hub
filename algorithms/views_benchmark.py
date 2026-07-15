@@ -23,7 +23,7 @@ def benchmark_list(request):
         "count": qs.count(),
     }
     if request.headers.get("HX-Request"):
-        return render(request, "benchmarks/_benchmark_card.html", context)
+        return render(request, "benchmarks/_results_grid.html", context)
     return render(request, "benchmarks/list.html", context)
 
 
@@ -40,10 +40,12 @@ def benchmark_detail(request, slug):
     metric_keys = sorted(all_metric_keys)
 
     best_values = {}
+    max_values = {}
     for key in metric_keys:
         values = [e.metrics.get(key) for e in entries if e.metrics and e.metrics.get(key) is not None]
         if values:
             best_values[key] = max(values) if key != "inference_time_ms" else min(values)
+            max_values[key] = max(values) if max(values) > 0 else 1
 
     sort_by = request.GET.get("sort", "")
     sort_dir = request.GET.get("dir", "desc")
@@ -55,6 +57,20 @@ def benchmark_detail(request, slug):
         )
     else:
         entries_list = list(entries)
+
+    for entry in entries_list:
+        entry.metric_cells = []
+        for key in metric_keys:
+            val = entry.metrics.get(key) if entry.metrics else None
+            is_best = val is not None and best_values.get(key) == val
+            max_val = max_values.get(key, 1)
+            pct = int(val / max_val * 100) if val is not None and max_val else 0
+            entry.metric_cells.append({
+                "key": key,
+                "value": val,
+                "is_best": is_best,
+                "bar_pct": pct,
+            })
 
     context = {
         "benchmark": benchmark,
@@ -157,7 +173,7 @@ def benchmark_edit(request, slug):
 def benchmark_compare(request, slug):
     benchmark = get_object_or_404(Benchmark, slug=slug)
     entry_ids = request.GET.getlist("entries")
-    entries = BenchmarkEntry.objects.filter(benchmark=benchmark, pk__in=entry_ids)
+    entries = list(BenchmarkEntry.objects.filter(benchmark=benchmark, pk__in=entry_ids))
 
     all_metric_keys = set()
     for entry in entries:
@@ -165,9 +181,17 @@ def benchmark_compare(request, slug):
             all_metric_keys.update(entry.metrics.keys())
     metric_keys = sorted(all_metric_keys)
 
+    rows = []
+    for key in metric_keys:
+        row = {"key": key, "values": []}
+        for entry in entries:
+            row["values"].append(entry.metrics.get(key) if entry.metrics else None)
+        rows.append(row)
+
     context = {
         "benchmark": benchmark,
         "entries": entries,
         "metric_keys": metric_keys,
+        "rows": rows,
     }
     return render(request, "benchmarks/_compare_selected.html", context)
